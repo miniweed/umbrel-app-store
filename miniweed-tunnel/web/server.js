@@ -85,6 +85,14 @@ function isTargetUrl(value) {
   }
 }
 
+function normalizeTargetUrl(value) {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `http://${trimmed}`;
+}
+
 function validateConfig(cfg) {
   const errors = [];
 
@@ -95,9 +103,18 @@ function validateConfig(cfg) {
   if (cfg.domain && !isHostname(cfg.domain)) errors.push('El dominio principal no es válido');
   if (!isEmail(cfg.acmeEmail)) errors.push('El email de Let\'s Encrypt no es válido');
 
+  const seenHosts = new Set();
   for (const [index, svc] of (cfg.services || []).entries()) {
     if (!isSubdomain(svc.subdomain)) errors.push(`El subdominio del servicio ${index + 1} no es válido`);
     if (svc.target && !isTargetUrl(svc.target)) errors.push(`La URL interna del servicio ${index + 1} no es válida`);
+
+    if (cfg.domain && svc.enabled && svc.target) {
+      const host = svc.subdomain ? `${svc.subdomain}.${cfg.domain}`.toLowerCase() : cfg.domain.toLowerCase();
+      if (seenHosts.has(host)) {
+        errors.push(`Hay dos servicios usando el mismo host público (${host})`);
+      }
+      seenHosts.add(host);
+    }
   }
 
   return errors;
@@ -206,7 +223,14 @@ app.post('/api/config', (req, res) => {
 
   const cfg = { ...existing, ...update };
   cfg.vpsPort = parseInt(cfg.vpsPort, 10) || 51820;
-  cfg.services = Array.isArray(cfg.services) ? cfg.services : [];
+  cfg.services = Array.isArray(cfg.services)
+    ? cfg.services.map(svc => ({
+        name: (svc.name || '').trim(),
+        subdomain: (svc.subdomain || '').trim().toLowerCase(),
+        target: normalizeTargetUrl(svc.target),
+        enabled: Boolean(svc.enabled)
+      }))
+    : [];
 
   const errors = validateConfig(cfg);
   if (errors.length) {

@@ -447,10 +447,10 @@ async function saveConfig() {
 
   const services = [...document.querySelectorAll('.service-item')].map(el => ({
     name: el.querySelector('.svc-name').value.trim(),
-    subdomain: el.querySelector('.svc-subdomain').value.trim(),
+    subdomain: el.querySelector('.svc-subdomain').value.trim().toLowerCase(),
     target: el.querySelector('.svc-target').value.trim(),
     enabled: el.querySelector('.svc-toggle').checked
-  })).filter(s => s.name || s.target);
+  })).filter(s => s.subdomain || s.target);
 
   const payload = {
     vpsIp: document.getElementById('vpsIp').value.trim(),
@@ -533,11 +533,15 @@ function updateServicesStatus() {
   const enabled = (cfg.services || []).filter(s => s.enabled && s.target);
   if (!cfg.domain || !enabled.length) { card.classList.add('hidden'); return; }
   card.classList.remove('hidden');
+  const seenHosts = new Set();
   urlsDiv.innerHTML = enabled.map(svc => {
     const host = svc.subdomain ? `${svc.subdomain}.${cfg.domain}` : cfg.domain;
+    const duplicated = seenHosts.has(host.toLowerCase());
+    seenHosts.add(host.toLowerCase());
     return `<div style="margin-bottom:8px">
       <span style="font-size:13px;color:#9ca3af;margin-right:8px">${esc(svc.name||svc.target)}</span>
       <span class="url-pill">🔗 https://${esc(host)}</span>
+      ${duplicated ? '<span style="font-size:12px;color:#f87171;margin-left:8px">(host duplicado)</span>' : ''}
     </div>`;
   }).join('');
 }
