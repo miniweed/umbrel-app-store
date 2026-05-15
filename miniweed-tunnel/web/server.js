@@ -79,7 +79,14 @@ function isEmail(value) {
 function isTargetUrl(value) {
   try {
     const url = new URL(value);
-    return ['http:', 'https:'].includes(url.protocol) && !/[\r\n{}]/.test(value);
+    const hasPath = url.pathname && url.pathname !== '/';
+    const hasQuery = Boolean(url.search);
+    const hasHash = Boolean(url.hash);
+    return ['http:', 'https:'].includes(url.protocol)
+      && !/[\r\n{}]/.test(value)
+      && !hasPath
+      && !hasQuery
+      && !hasHash;
   } catch {
     return false;
   }
@@ -89,8 +96,14 @@ function normalizeTargetUrl(value) {
   if (typeof value !== 'string') return '';
   const trimmed = value.trim();
   if (!trimmed) return '';
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  return `http://${trimmed}`;
+  const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+  try {
+    const parsed = new URL(candidate);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return '';
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return '';
+  }
 }
 
 function validateConfig(cfg) {
