@@ -1,0 +1,22 @@
+manifestVersion: 1
+id: umbrel-tunnel-store-tunnel
+name: Tunnel
+tagline: Expón tu servidor al mundo sin tocar el router
+icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/umbrel-tunnel-store-tunnel/icon.png
+category: networking
+version: "1.0.6"
+port: 3016
+description: >-
+  Conecta tu Umbrel a un VPS propio y expón servicios a internet sin abrir puertos
+  en tu router. Alternativa 100% self-hosted a Cloudflare Tunnel. Funciona detrás
+  de CGNAT. Usa WireGuard para cifrado extremo a extremo y Caddy para HTTPS
+  automático con Let's Encrypt.
+developer: miniweed
+website: https://github.com/miniweed/umbrel-app-store
+repo: https://github.com/miniweed/umbrel-app-store
+support: https://github.com/miniweed/umbrel-app-store/issues
+gallery: []
+releaseNotes: >-
+  Icono actualizado sin candado en app y assets SVG.
+dependencies: []
+defaultPassword: ""
