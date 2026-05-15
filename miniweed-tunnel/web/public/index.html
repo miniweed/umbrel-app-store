@@ -444,6 +444,7 @@ async function saveConfig() {
   const msg = document.getElementById('save-msg');
   spinner.classList.remove('hidden');
   msg.textContent = '';
+  msg.style.color = '#6b7280';
 
   const services = [...document.querySelectorAll('.service-item')].map(el => ({
     name: el.querySelector('.svc-name').value.trim(),
@@ -474,7 +475,16 @@ async function saveConfig() {
     msg.style.color = '#4ade80';
     await loadConfig();
   } else {
-    msg.textContent = 'Error al guardar.';
+    let detail = '';
+    try {
+      const err = await res.json();
+      if (Array.isArray(err.errors) && err.errors.length) {
+        detail = err.errors.join(' | ');
+      } else if (typeof err.error === 'string') {
+        detail = err.error;
+      }
+    } catch {}
+    msg.textContent = detail ? `Error: ${detail}` : 'Error al guardar.';
     msg.style.color = '#f87171';
   }
 }
