@@ -362,7 +362,7 @@
       <div id="vps-script-block" class="hidden">
         <div class="code-block" id="vps-script-code"></div>
         <div class="btn-row mt-2">
-          <button class="btn btn-secondary btn-sm" onclick="copyScript()">Copiar script</button>
+          <button class="btn btn-secondary btn-sm" onclick="copyScript(this)">Copiar script</button>
         </div>
       </div>
     </div>
@@ -557,13 +557,33 @@ async function loadVpsScript() {
   }
 }
 
-function copyScript() {
+async function copyScript(buttonEl) {
   const code = document.getElementById('vps-script-code').textContent;
-  navigator.clipboard.writeText(code).then(() => {
-    const btn = event.target;
-    btn.textContent = 'Copiado!';
-    setTimeout(() => btn.textContent = 'Copiar script', 2000);
-  });
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(code);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = code;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if (!ok) throw new Error('copy failed');
+    }
+
+    if (buttonEl) {
+      buttonEl.textContent = 'Copiado!';
+      setTimeout(() => {
+        buttonEl.textContent = 'Copiar script';
+      }, 2000);
+    }
+  } catch {
+    alert('No se pudo copiar automáticamente. Copia el script manualmente.');
+  }
 }
 
 // ── Steps indicator ───────────────────────────────────────────────────────────
