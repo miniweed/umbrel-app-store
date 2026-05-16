@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const https = require('https');
 const { Client } = require('ssh2');
 
 const app = express();
@@ -10,6 +11,7 @@ const WG_API_HOST = process.env.WG_API_HOST || 'wg';
 const WG_API_PORT = 8080;
 const API_AUTH_TOKEN = process.env.TUNNEL_API_TOKEN || '';
 const deployJobs = new Map();
+let configLock = Promise.resolve();
 
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const WG_CONF = path.join(DATA_DIR, 'wg0.conf');
@@ -25,7 +27,8 @@ const DEFAULT_CONFIG = {
   tunnelServerIp: '10.8.0.1',
   domain: '',
   acmeEmail: '',
-  services: []
+  services: [],
+  serviceHealth: {}
 };
 
 const DEFAULT_CADDYFILE = ':80 {\n  respond "Umbrel Tunnel — not configured yet"\n}\n';
@@ -35,6 +38,68 @@ app.use(express.json({ limit: '32kb' }));
 const apiRateWindowMs = 60 * 1000;
 const apiRateMax = 120;
 const apiRateStore = new Map();
+const deployJobTtlMs = 60 * 60 * 1000;
+const deployJobMax = 200;
+
+app.set('trust proxy', 1);
+
+function parseCookies(req) {
+  const cookie = req.headers.cookie || '';
+  const out = {};
+  for (const part of cookie.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    const key = part.slice(0, idx).trim();
+    const value = part.slice(idx + 1).trim();
+    if (!key) continue;
+    try {
+      out[key] = decodeURIComponent(value);
+    } catch {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function withConfigLock(fn) {
+  const run = configLock.then(() => fn());
+  configLock = run.catch(() => {});
+  return run;
+}
+
+function cleanupApiRateStore() {
+  const now = Date.now();
+  for (const [ip, entry] of apiRateStore.entries()) {
+    if (!entry || now > entry.resetAt) apiRateStore.delete(ip);
+  }
+}
+
+function cleanupDeployJobs() {
+  const now = Date.now();
+  for (const [jobId, job] of deployJobs.entries()) {
+    if (!job) {
+      deployJobs.delete(jobId);
+      continue;
+    }
+    const refTs = job.finishedAt || job.startedAt || now;
+    if (now - refTs > deployJobTtlMs) deployJobs.delete(jobId);
+  }
+
+  if (deployJobs.size <= deployJobMax) return;
+  const byOldest = [...deployJobs.entries()].sort((a, b) => {
+    const aTs = a[1].finishedAt || a[1].startedAt || 0;
+    const bTs = b[1].finishedAt || b[1].startedAt || 0;
+    return aTs - bTs;
+  });
+  for (const [jobId] of byOldest.slice(0, deployJobs.size - deployJobMax)) {
+    deployJobs.delete(jobId);
+  }
+}
+
+const rateGc = setInterval(cleanupApiRateStore, 60 * 1000);
+if (typeof rateGc.unref === 'function') rateGc.unref();
+const jobsGc = setInterval(cleanupDeployJobs, 5 * 60 * 1000);
+if (typeof jobsGc.unref === 'function') jobsGc.unref();
 
 function apiRateLimit(req, res, next) {
   const now = Date.now();
@@ -56,8 +121,9 @@ function apiRateLimit(req, res, next) {
 
 function requireApiAuth(req, res, next) {
   if (!API_AUTH_TOKEN) return next();
-  const token = req.get('x-tunnel-api-token');
-  if (token !== API_AUTH_TOKEN) {
+  const headerToken = req.get('x-tunnel-api-token');
+  const cookieToken = parseCookies(req).tunnel_api_token;
+  if (headerToken !== API_AUTH_TOKEN && cookieToken !== API_AUTH_TOKEN) {
     return res.status(401).json({ error: 'No autorizado' });
   }
   return next();
@@ -69,7 +135,11 @@ app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 app.get(['/', '/index.html'], (req, res) => {
   const indexPath = path.join(__dirname, 'public', 'index.html');
   let html = fs.readFileSync(indexPath, 'utf8');
-  html = html.replace('__TUNNEL_API_TOKEN__', JSON.stringify(API_AUTH_TOKEN));
+  html = html.replace('__TUNNEL_API_TOKEN__', JSON.stringify(''));
+  if (API_AUTH_TOKEN) {
+    const secureAttr = req.secure || req.get('x-forwarded-proto') === 'https' ? '; Secure' : '';
+    res.setHeader('Set-Cookie', `tunnel_api_token=${encodeURIComponent(API_AUTH_TOKEN)}; Path=/; HttpOnly; SameSite=Strict${secureAttr}`);
+  }
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(html);
 });
@@ -102,6 +172,11 @@ function isWireGuardKey(value) {
   } catch {
     return false;
   }
+}
+
+function keyFingerprint(key) {
+  if (!isWireGuardKey(key)) return '';
+  return `${key.slice(0, 6)}...${key.slice(-6)}`;
 }
 
 function isHostname(value) {
@@ -148,6 +223,75 @@ function normalizeTargetUrl(value) {
   } catch {
     return '';
   }
+}
+
+function serviceKey(svc) {
+  const subdomain = (svc?.subdomain || '').trim().toLowerCase() || '@root';
+  const target = (svc?.target || '').trim().toLowerCase();
+  return `${subdomain}|${target}`;
+}
+
+function probeServiceTarget(target, timeoutMs = 4000) {
+  return new Promise(resolve => {
+    try {
+      const parsed = new URL(target);
+      const isHttps = parsed.protocol === 'https:';
+      if (!isHttps && parsed.protocol !== 'http:') {
+        return resolve({ ok: false, error: 'Protocolo no soportado' });
+      }
+
+      const transport = isHttps ? https : http;
+      const req = transport.request(
+        {
+          protocol: parsed.protocol,
+          hostname: parsed.hostname,
+          port: parsed.port || (isHttps ? 443 : 80),
+          path: '/',
+          method: 'GET',
+          timeout: timeoutMs,
+          rejectUnauthorized: false
+        },
+        res => {
+          res.resume();
+          resolve({ ok: true, statusCode: res.statusCode || 0 });
+        }
+      );
+
+      req.on('timeout', () => req.destroy(new Error('timeout')));
+      req.on('error', err => resolve({ ok: false, error: err.message }));
+      req.end();
+    } catch (err) {
+      resolve({ ok: false, error: err.message });
+    }
+  });
+}
+
+async function checkServicesHealth(services) {
+  const health = {};
+  await Promise.all((services || []).map(async svc => {
+    const key = serviceKey(svc);
+    if (!svc.enabled || !svc.target) {
+      health[key] = { ok: false, checked: false, message: 'Desactivado o incompleto' };
+      return;
+    }
+
+    const result = await probeServiceTarget(svc.target);
+    if (result.ok) {
+      health[key] = {
+        ok: true,
+        checked: true,
+        statusCode: result.statusCode,
+        message: `Conectado (${result.statusCode})`
+      };
+    } else {
+      health[key] = {
+        ok: false,
+        checked: true,
+        message: `Sin conexion (${result.error || 'error desconocido'})`
+      };
+    }
+  }));
+  return health;
 }
 
 function validateConfig(cfg) {
@@ -339,6 +483,29 @@ systemctl restart fail2ban >/dev/null 2>&1 || true
 systemctl enable unattended-upgrades >/dev/null 2>&1 || true
 systemctl restart unattended-upgrades >/dev/null 2>&1 || true
 
+# Endurecer SSH a solo clave publica (sin romper acceso)
+SSH_HARDENED="no"
+if [ -s /root/.ssh/authorized_keys ]; then
+  mkdir -p /etc/ssh/sshd_config.d
+  cat > /etc/ssh/sshd_config.d/99-miniweed-tunnel.conf <<SSHEOF
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+PubkeyAuthentication yes
+PermitRootLogin prohibit-password
+SSHEOF
+
+  if /usr/sbin/sshd -t; then
+    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+    SSH_HARDENED="yes"
+  else
+    rm -f /etc/ssh/sshd_config.d/99-miniweed-tunnel.conf
+    echo "Advertencia: configuracion SSH invalida, se omite endurecimiento SSH"
+  fi
+else
+  echo "Advertencia: /root/.ssh/authorized_keys no existe o esta vacio; se mantiene acceso por password para evitar lockout"
+fi
+
 VPS_PRIV=$(wg genkey)
 VPS_PUB=$(echo "$VPS_PRIV" | wg pubkey)
 
@@ -372,6 +539,11 @@ echo "=============================================="
 echo " VPS Public Key: $VPS_PUB"
 echo "=============================================="
 echo " SSH PORT permitido: $SSH_PORT"
+if [ "$SSH_HARDENED" = "yes" ]; then
+  echo " SSH hardening: PasswordAuthentication no (solo clave publica)"
+else
+  echo " SSH hardening: OMITIDO para evitar lockout"
+fi
 echo " IMPORTANTE: en el panel cloud del proveedor abre TCP 80/443 y UDP $WG_PORT"
 echo " Backup firewall: $BACKUP_FILE"
 echo " Rollback script: /root/miniweed-rollback-firewall.sh"
@@ -384,15 +556,11 @@ function validateSshDeployInput(input) {
   const user = (input.sshUser || 'root').trim();
   const port = parseInt(input.sshPort, 10) || 22;
   const privateKey = input.privateKey || '';
-  const passphrase = input.passphrase || '';
-  const password = input.password || '';
 
   if (!host) return { error: 'SSH host requerido' };
   if (!user) return { error: 'SSH user requerido' };
   if (port < 1 || port > 65535) return { error: 'SSH port inválido' };
-  if (!privateKey && !password) {
-    return { error: 'Debes proporcionar clave privada SSH o password' };
-  }
+  if (!privateKey) return { error: 'Debes proporcionar clave privada SSH' };
 
   if (privateKey && (!privateKey.includes('BEGIN') || !privateKey.includes('PRIVATE KEY'))) {
     return { error: 'Clave privada SSH inválida' };
@@ -402,9 +570,7 @@ function validateSshDeployInput(input) {
     host,
     user,
     port,
-    privateKey,
-    passphrase,
-    password
+    privateKey
   };
 }
 
@@ -473,8 +639,36 @@ function deployScriptOverSsh(sshConfig, script) {
       port: sshConfig.port,
       username: sshConfig.user,
       privateKey: sshConfig.privateKey || undefined,
-      passphrase: sshConfig.passphrase || undefined,
-      password: sshConfig.password || undefined,
+      readyTimeout: 20000
+    });
+  });
+}
+
+function runSshCommand(sshConfig, command, timeoutMs = 30 * 1000) {
+  return new Promise((resolve, reject) => {
+    const ssh = new Client();
+    ssh.on('ready', async () => {
+      try {
+        const result = await runRemoteCommand(ssh, command, timeoutMs);
+        ssh.end();
+        if (result.code !== 0) {
+          const err = new Error(`Comando remoto terminó con código ${result.code}`);
+          err.stdout = result.stdout;
+          err.stderr = result.stderr;
+          return reject(err);
+        }
+        resolve(result);
+      } catch (err) {
+        ssh.end();
+        reject(err);
+      }
+    });
+    ssh.on('error', reject);
+    ssh.connect({
+      host: sshConfig.host,
+      port: sshConfig.port,
+      username: sshConfig.user,
+      privateKey: sshConfig.privateKey || undefined,
       readyTimeout: 20000
     });
   });
@@ -484,6 +678,35 @@ function extractVpsPublicKey(text) {
   if (!text) return '';
   const match = text.match(/VPS Public Key:\s*([A-Za-z0-9+/]{43}=)/);
   return match ? match[1] : '';
+}
+
+async function readVpsPublicKeyOverSsh(sshConfig) {
+  const result = await runSshCommand(sshConfig, 'wg show wg0 public-key', 30 * 1000);
+  const key = (result.stdout || '').trim();
+  return isWireGuardKey(key) ? key : '';
+}
+
+async function waitForHandshake(maxWaitMs = 45 * 1000) {
+  const intervalMs = 3000;
+  const started = Date.now();
+
+  while (Date.now() - started < maxWaitMs) {
+    try {
+      const status = await wgApi('/status');
+      if (status && status.connected) {
+        return {
+          ok: true,
+          handshakedPeers: status.handshakedPeers || 0,
+          lastHandshakeAgeSec: status.lastHandshakeAgeSec ?? null
+        };
+      }
+    } catch {
+      // Keep polling while wg-api initializes
+    }
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+
+  return { ok: false, handshakedPeers: 0, lastHandshakeAgeSec: null };
 }
 
 function wgApi(urlPath) {
@@ -509,37 +732,49 @@ function wgApi(urlPath) {
 app.get('/api/config', (req, res) => {
   const cfg = loadConfig();
   // Never expose private key to the frontend
-  res.json({ ...cfg, privateKey: cfg.privateKey ? '••••' : '' });
+  res.json({
+    ...cfg,
+    privateKey: cfg.privateKey ? '••••' : '',
+    vpsPubKeyFingerprint: keyFingerprint(cfg.vpsPubKey)
+  });
 });
 
-app.post('/api/config', (req, res) => {
-  const existing = loadConfig();
-  const update = req.body;
-  if (update.privateKey === '••••') update.privateKey = existing.privateKey;
+app.post('/api/config', async (req, res) => {
+  try {
+    const result = await withConfigLock(async () => {
+      const existing = loadConfig();
+      const update = req.body || {};
+      if (update.privateKey === '••••') update.privateKey = existing.privateKey;
 
-  const cfg = { ...existing, ...update };
-  cfg.vpsPort = parseInt(cfg.vpsPort, 10) || 51820;
-  cfg.services = Array.isArray(cfg.services)
-    ? cfg.services.map(svc => ({
-        name: (svc.name || '').trim(),
-        subdomain: (svc.subdomain || '').trim().toLowerCase(),
-        target: normalizeTargetUrl(svc.target),
-        enabled: Boolean(svc.enabled)
-      }))
-    : [];
+      const cfg = { ...existing, ...update };
+      cfg.vpsPort = parseInt(cfg.vpsPort, 10) || 51820;
+      cfg.services = Array.isArray(cfg.services)
+        ? cfg.services.map(svc => ({
+            name: (svc.name || '').trim(),
+            subdomain: (svc.subdomain || '').trim().toLowerCase(),
+            target: normalizeTargetUrl(svc.target),
+            enabled: Boolean(svc.enabled)
+          }))
+        : [];
 
-  const errors = validateConfig(cfg);
-  if (errors.length) {
-    return res.status(400).json({ errors });
+      const errors = validateConfig(cfg);
+      if (errors.length) return { errors };
+
+      cfg.serviceHealth = await checkServicesHealth(cfg.services);
+      saveConfig(cfg);
+
+      const wgConf = generateWgConf(cfg);
+      if (wgConf) fs.writeFileSync(WG_CONF, wgConf);
+      fs.writeFileSync(CADDYFILE, generateCaddyfile(cfg));
+
+      return { ok: true, serviceHealth: cfg.serviceHealth };
+    });
+
+    if (result.errors) return res.status(400).json({ errors: result.errors });
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ error: `Error guardando configuracion: ${err.message}` });
   }
-
-  saveConfig(cfg);
-
-  const wgConf = generateWgConf(cfg);
-  if (wgConf) fs.writeFileSync(WG_CONF, wgConf);
-  fs.writeFileSync(CADDYFILE, generateCaddyfile(cfg));
-
-  res.json({ ok: true });
 });
 
 app.get('/api/keygen', async (req, res) => {
@@ -602,20 +837,59 @@ app.post('/api/deploy-vps', async (req, res) => {
       const result = await deployScriptOverSsh(parsed, script);
 
       const combinedOutput = `${result.stdout || ''}\n${result.stderr || ''}`;
-      const vpsPubKey = extractVpsPublicKey(combinedOutput);
+      const printedVpsPubKey = extractVpsPublicKey(combinedOutput);
+      const readbackVpsPubKey = await readVpsPublicKeyOverSsh(parsed).catch(() => '');
+      const vpsPubKey = readbackVpsPubKey || printedVpsPubKey;
       let autoConfigured = false;
+      let keySyncStatus = 'missing';
+      let keySyncMessage = 'No se pudo detectar la clave publica del VPS';
+      let handshake = { ok: false, handshakedPeers: 0, lastHandshakeAgeSec: null };
 
       if (vpsPubKey) {
-        const freshCfg = loadConfig();
-        freshCfg.vpsPubKey = vpsPubKey;
-        saveConfig(freshCfg);
+        const freshCfg = await withConfigLock(async () => {
+          const nextCfg = loadConfig();
+          nextCfg.vpsPubKey = vpsPubKey;
+          saveConfig(nextCfg);
 
-        const wgConf = generateWgConf(freshCfg);
-        if (wgConf) {
-          fs.writeFileSync(WG_CONF, wgConf);
-          autoConfigured = true;
+          const wgConf = generateWgConf(nextCfg);
+          if (wgConf) {
+            fs.writeFileSync(WG_CONF, wgConf);
+            autoConfigured = true;
+          }
+          fs.writeFileSync(CADDYFILE, generateCaddyfile(nextCfg));
+          return nextCfg;
+        });
+
+        if (printedVpsPubKey && readbackVpsPubKey && printedVpsPubKey !== readbackVpsPubKey) {
+          keySyncStatus = 'readback-corrected';
+          keySyncMessage = 'La clave impresa no coincidia con WG; se uso la clave leida directamente del VPS.';
+        } else {
+          keySyncStatus = 'synced';
+          keySyncMessage = 'Clave publica del VPS sincronizada.';
         }
-        fs.writeFileSync(CADDYFILE, generateCaddyfile(freshCfg));
+
+        handshake = await waitForHandshake();
+
+        if (!handshake.ok && readbackVpsPubKey) {
+          const retryReadback = await readVpsPublicKeyOverSsh(parsed).catch(() => '');
+          if (retryReadback && retryReadback !== freshCfg.vpsPubKey) {
+            await withConfigLock(async () => {
+              const retryCfg = loadConfig();
+              retryCfg.vpsPubKey = retryReadback;
+              saveConfig(retryCfg);
+              const retryWgConf = generateWgConf(retryCfg);
+              if (retryWgConf) fs.writeFileSync(WG_CONF, retryWgConf);
+            });
+            keySyncStatus = 'retry-updated';
+            keySyncMessage = 'Se detecto cambio de clave en VPS y se aplico una resincronizacion automatica.';
+            handshake = await waitForHandshake();
+          }
+        }
+
+        if (!handshake.ok && keySyncStatus === 'synced') {
+          keySyncStatus = 'synced-no-handshake-yet';
+          keySyncMessage = 'Clave sincronizada, pero aun sin handshake. Verifica unos segundos y revisa firewall del proveedor.';
+        }
       }
 
       deployJobs.set(jobId, {
@@ -626,7 +900,13 @@ app.post('/api/deploy-vps', async (req, res) => {
         stdout: result.stdout || '',
         stderr: result.stderr || '',
         vpsPubKey,
-        autoConfigured
+        vpsPubKeyFingerprint: keyFingerprint(vpsPubKey),
+        autoConfigured,
+        keySyncStatus,
+        keySyncMessage,
+        handshakeOk: handshake.ok,
+        handshakedPeers: handshake.handshakedPeers,
+        lastHandshakeAgeSec: handshake.lastHandshakeAgeSec
       });
     } catch (err) {
       deployJobs.set(jobId, {

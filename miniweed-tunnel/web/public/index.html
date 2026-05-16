@@ -129,7 +129,7 @@
   .services-list { display: flex; flex-direction: column; gap: 10px; }
   .service-item {
     display: grid;
-    grid-template-columns: 1fr 130px 1fr auto;
+    grid-template-columns: 1fr 130px 1fr 44px 120px auto;
     gap: 10px;
     align-items: center;
     padding: 12px;
@@ -154,6 +154,26 @@
   }
   .toggle input:checked + .toggle-slider { background: #7c3aed; }
   .toggle input:checked + .toggle-slider::before { transform: translateX(18px); }
+  .service-health {
+    font-size: 12px;
+    border-radius: 999px;
+    padding: 4px 10px;
+    text-align: center;
+    border: 1px solid #333;
+    color: #9ca3af;
+    background: #1c1c1c;
+    white-space: nowrap;
+  }
+  .service-health.ok {
+    background: #14532d;
+    border-color: #166534;
+    color: #4ade80;
+  }
+  .service-health.error {
+    background: #2d1515;
+    border-color: #7f1d1d;
+    color: #f87171;
+  }
 
   /* Code block */
   .code-block {
@@ -255,6 +275,7 @@
   <div class="tabs">
     <button class="tab active" onclick="showTab('dashboard')">Panel</button>
     <button class="tab" onclick="showTab('config')">Configuración</button>
+    <button class="tab" onclick="showTab('services')">Servicios</button>
     <button class="tab" onclick="showTab('vps')">Setup VPS</button>
   </div>
 
@@ -312,6 +333,7 @@
       <div class="field">
         <label>Clave pública del VPS <span class="text-sm">(obtenida al ejecutar el script de setup)</span></label>
         <input type="text" id="vpsPubKey" placeholder="Pega aquí la clave pública del VPS">
+        <p id="vps-key-sync" class="text-sm mt-2" style="color:#9ca3af">Sin sincronizar</p>
       </div>
     </div>
 
@@ -330,6 +352,18 @@
       </div>
     </div>
 
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="saveConfig()">
+        <span id="save-spinner" class="spinner hidden"></span>
+        Guardar configuración
+      </button>
+      <span id="save-msg" class="text-sm" style="align-self:center"></span>
+    </div>
+
+  </div>
+
+  <!-- ═══ SERVICIOS ══════════════════════════════════════════════════════════ -->
+  <div id="tab-services" class="hidden">
     <div class="card">
       <div class="card-title">Servicios a exponer</div>
       <p class="text-sm" style="margin-bottom:14px">
@@ -340,13 +374,9 @@
     </div>
 
     <div class="btn-row">
-      <button class="btn btn-primary" onclick="saveConfig()">
-        <span id="save-spinner" class="spinner hidden"></span>
-        Guardar configuración
-      </button>
-      <span id="save-msg" class="text-sm" style="align-self:center"></span>
+      <button class="btn btn-primary" onclick="saveConfig()">Guardar configuración</button>
+      <span id="services-save-msg" class="text-sm" style="align-self:center"></span>
     </div>
-
   </div>
 
   <!-- ═══ VPS SETUP ═════════════════════════════════════════════════════════ -->
@@ -390,14 +420,6 @@
       <div class="field">
         <label>Clave privada SSH (PEM/OpenSSH)</label>
         <textarea id="sshPrivateKey" style="width:100%;min-height:140px;background:#0d0d0d;border:1px solid #333;border-radius:8px;padding:10px;color:#e5e5e5;font-family:monospace;font-size:12px"></textarea>
-      </div>
-      <div class="field">
-        <label>Password SSH (opcional, si no usas clave)</label>
-        <input type="password" id="sshPassword" placeholder="Opcional">
-      </div>
-      <div class="field">
-        <label>Passphrase (si aplica)</label>
-        <input type="password" id="sshPassphrase" placeholder="Opcional">
       </div>
       <div class="btn-row">
         <button class="btn btn-primary" onclick="deployToVps(this)">Ejecutar deploy</button>
@@ -468,11 +490,11 @@ async function apiFetch(url, options = {}) {
 
 // ── Tab navigation ────────────────────────────────────────────────────────────
 function showTab(name) {
-  ['dashboard','config','vps'].forEach(t => {
+  ['dashboard','config','services','vps'].forEach(t => {
     document.getElementById('tab-' + t).classList.toggle('hidden', t !== name);
   });
   document.querySelectorAll('.tab').forEach((el, i) => {
-    el.classList.toggle('active', ['dashboard','config','vps'][i] === name);
+    el.classList.toggle('active', ['dashboard','config','services','vps'][i] === name);
   });
   if (name === 'vps') loadVpsScript();
 }
@@ -486,6 +508,9 @@ async function loadConfig() {
   document.getElementById('vpsIp').value = cfg.vpsIp || '';
   document.getElementById('vpsPort').value = cfg.vpsPort || 51820;
   document.getElementById('vpsPubKey').value = cfg.vpsPubKey || '';
+  document.getElementById('vps-key-sync').textContent = cfg.vpsPubKey
+    ? `Clave VPS sincronizada (${cfg.vpsPubKeyFingerprint || 'sin huella'})`
+    : 'Sin sincronizar';
   document.getElementById('domain').value = cfg.domain || '';
   document.getElementById('acmeEmail').value = cfg.acmeEmail || '';
 
@@ -501,10 +526,8 @@ async function loadConfig() {
 // ── Save config ───────────────────────────────────────────────────────────────
 async function saveConfig() {
   const spinner = document.getElementById('save-spinner');
-  const msg = document.getElementById('save-msg');
   spinner.classList.remove('hidden');
-  msg.textContent = '';
-  msg.style.color = '#6b7280';
+  setSaveMessage('', '#6b7280');
 
   const services = [...document.querySelectorAll('.service-item')].map(el => ({
     name: el.querySelector('.svc-name').value.trim(),
@@ -531,8 +554,7 @@ async function saveConfig() {
 
   spinner.classList.add('hidden');
   if (res.ok) {
-    msg.textContent = 'Guardado. El túnel se reconfigura automáticamente.';
-    msg.style.color = '#4ade80';
+    setSaveMessage('Guardado. El túnel se reconfigura automáticamente y se verificaron servicios.', '#4ade80');
     await loadConfig();
   } else {
     let detail = '';
@@ -544,8 +566,7 @@ async function saveConfig() {
         detail = err.error;
       }
     } catch {}
-    msg.textContent = detail ? `Error: ${detail}` : 'Error al guardar.';
-    msg.style.color = '#f87171';
+    setSaveMessage(detail ? `Error: ${detail}` : 'Error al guardar.', '#f87171');
   }
 }
 
@@ -573,27 +594,42 @@ async function generateKeys() {
 function renderServices() {
   const list = document.getElementById('services-list');
   list.innerHTML = '';
-  (cfg.services || []).forEach((svc, i) => addServiceRow(svc, i));
+  (cfg.services || []).forEach((svc, i) => {
+    const health = cfg.serviceHealth?.[serviceKey(svc)] || null;
+    addServiceRow(svc, i, health);
+  });
 }
 
 function addService() {
   cfg.services = cfg.services || [];
-  addServiceRow({ name: '', subdomain: '', target: '', enabled: true }, cfg.services.length);
+  addServiceRow({ name: '', subdomain: '', target: '', enabled: true }, cfg.services.length, null);
 }
 
-function addServiceRow(svc, i) {
+function serviceKey(svc) {
+  const subdomain = (svc?.subdomain || '').trim().toLowerCase() || '@root';
+  const target = (svc?.target || '').trim().toLowerCase();
+  return `${subdomain}|${target}`;
+}
+
+function formatServiceHealth(health) {
+  if (!health || !health.checked) return { cls: '', text: 'Sin comprobar' };
+  if (health.ok) return { cls: 'ok', text: 'Conectado ✓' };
+  return { cls: 'error', text: 'Sin conexion' };
+}
+
+function addServiceRow(svc, i, health) {
   const list = document.getElementById('services-list');
   const el = document.createElement('div');
+  const h = formatServiceHealth(health);
   el.className = 'service-item';
   el.innerHTML = `
     <input class="svc-name" type="text" placeholder="Nombre (ej: Nextcloud)" value="${esc(svc.name||'')}">
     <input class="svc-subdomain" type="text" placeholder="Subdominio" value="${esc(svc.subdomain||'')}">
     <input class="svc-target" type="text" placeholder="http://IP:puerto" value="${esc(svc.target||'')}">
     <label class="toggle"><input type="checkbox" class="svc-toggle" ${svc.enabled?'checked':''}><span class="toggle-slider"></span></label>
+    <span class="service-health ${h.cls}" title="${esc(health?.message || 'Sin comprobar')}">${h.text}</span>
     <button class="btn btn-danger btn-sm" onclick="this.closest('.service-item').remove()">✕</button>
   `;
-  // re-add: fix grid cols to 5
-  el.style.gridTemplateColumns = '1fr 120px 1fr 44px auto';
   list.appendChild(el);
 }
 
@@ -704,14 +740,12 @@ async function deployToVps(buttonEl) {
     sshHost: document.getElementById('sshHost').value.trim(),
     sshUser: document.getElementById('sshUser').value.trim(),
     sshPort: parseInt(document.getElementById('sshPort').value, 10) || 22,
-    privateKey: document.getElementById('sshPrivateKey').value,
-    password: document.getElementById('sshPassword').value,
-    passphrase: document.getElementById('sshPassphrase').value
+    privateKey: document.getElementById('sshPrivateKey').value
   };
 
-  if (!payload.sshHost || (!payload.privateKey && !payload.password)) {
+  if (!payload.sshHost || !payload.privateKey) {
     msg.style.color = '#f87171';
-    msg.textContent = 'Host y credencial SSH son obligatorios (clave o password).';
+    msg.textContent = 'Host y clave privada SSH son obligatorios.';
     return;
   }
 
@@ -777,12 +811,17 @@ async function deployToVps(buttonEl) {
 
       if (status.status === 'success') {
         msg.style.color = '#4ade80';
+        const fingerprint = status.vpsPubKeyFingerprint ? ` (${status.vpsPubKeyFingerprint})` : '';
+        const keySyncNote = status.keySyncMessage ? ` ${status.keySyncMessage}` : '';
+        const handshakeNote = status.handshakeOk
+          ? ' Handshake WireGuard detectado.'
+          : ' Aun sin handshake inmediato; puede tardar unos segundos.';
         if (status.autoConfigured) {
-          msg.textContent = 'Deploy ejecutado y clave VPS configurada automaticamente.';
+          msg.textContent = `Deploy ejecutado y clave VPS configurada automaticamente${fingerprint}.${keySyncNote}${handshakeNote}`;
           await loadConfig();
           updateSteps();
         } else {
-          msg.textContent = 'Deploy ejecutado correctamente.';
+          msg.textContent = `Deploy ejecutado correctamente.${keySyncNote}`;
         }
         return;
       }
@@ -850,6 +889,17 @@ async function pollStatus() {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+}
+
+function setSaveMessage(text, color) {
+  const ids = ['save-msg', 'services-save-msg'];
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (el) {
+      el.textContent = text;
+      el.style.color = color;
+    }
+  }
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
