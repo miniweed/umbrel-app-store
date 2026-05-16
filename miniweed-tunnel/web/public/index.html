@@ -392,8 +392,12 @@
         <textarea id="sshPrivateKey" style="width:100%;min-height:140px;background:#0d0d0d;border:1px solid #333;border-radius:8px;padding:10px;color:#e5e5e5;font-family:monospace;font-size:12px"></textarea>
       </div>
       <div class="field">
+        <label>Password SSH (opcional, si no usas clave)</label>
+        <input type="password" id="sshPassword" placeholder="Opcional">
+      </div>
+      <div class="field">
         <label>Passphrase (si aplica)</label>
-        <input type="text" id="sshPassphrase" placeholder="Opcional">
+        <input type="password" id="sshPassphrase" placeholder="Opcional">
       </div>
       <div class="btn-row">
         <button class="btn btn-primary" onclick="deployToVps(this)">Ejecutar deploy</button>
@@ -701,12 +705,13 @@ async function deployToVps(buttonEl) {
     sshUser: document.getElementById('sshUser').value.trim(),
     sshPort: parseInt(document.getElementById('sshPort').value, 10) || 22,
     privateKey: document.getElementById('sshPrivateKey').value,
+    password: document.getElementById('sshPassword').value,
     passphrase: document.getElementById('sshPassphrase').value
   };
 
-  if (!payload.sshHost || !payload.privateKey) {
+  if (!payload.sshHost || (!payload.privateKey && !payload.password)) {
     msg.style.color = '#f87171';
-    msg.textContent = 'Host y clave privada son obligatorios.';
+    msg.textContent = 'Host y credencial SSH son obligatorios (clave o password).';
     return;
   }
 

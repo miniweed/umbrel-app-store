@@ -377,11 +377,16 @@ function validateSshDeployInput(input) {
   const port = parseInt(input.sshPort, 10) || 22;
   const privateKey = input.privateKey || '';
   const passphrase = input.passphrase || '';
+  const password = input.password || '';
 
   if (!host) return { error: 'SSH host requerido' };
   if (!user) return { error: 'SSH user requerido' };
   if (port < 1 || port > 65535) return { error: 'SSH port inválido' };
-  if (!privateKey.includes('BEGIN') || !privateKey.includes('PRIVATE KEY')) {
+  if (!privateKey && !password) {
+    return { error: 'Debes proporcionar clave privada SSH o password' };
+  }
+
+  if (privateKey && (!privateKey.includes('BEGIN') || !privateKey.includes('PRIVATE KEY'))) {
     return { error: 'Clave privada SSH inválida' };
   }
 
@@ -390,7 +395,8 @@ function validateSshDeployInput(input) {
     user,
     port,
     privateKey,
-    passphrase
+    passphrase,
+    password
   };
 }
 
@@ -451,8 +457,9 @@ function deployScriptOverSsh(sshConfig, script) {
       host: sshConfig.host,
       port: sshConfig.port,
       username: sshConfig.user,
-      privateKey: sshConfig.privateKey,
+      privateKey: sshConfig.privateKey || undefined,
       passphrase: sshConfig.passphrase || undefined,
+      password: sshConfig.password || undefined,
       readyTimeout: 20000
     });
   });
