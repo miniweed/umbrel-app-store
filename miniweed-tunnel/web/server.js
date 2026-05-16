@@ -400,7 +400,7 @@ function validateSshDeployInput(input) {
   };
 }
 
-function runRemoteCommand(ssh, command, timeoutMs = 8 * 60 * 1000) {
+function runRemoteCommand(ssh, command, timeoutMs = 20 * 60 * 1000) {
   return new Promise((resolve, reject) => {
     let stdout = '';
     let stderr = '';
@@ -410,7 +410,7 @@ function runRemoteCommand(ssh, command, timeoutMs = 8 * 60 * 1000) {
 
       const timer = setTimeout(() => {
         stream.close();
-        reject(new Error('Timeout ejecutando comando remoto'));
+        reject(new Error('Timeout ejecutando comando remoto (20m)'));
       }, timeoutMs);
 
       stream.on('close', code => {
@@ -440,7 +440,8 @@ function deployScriptOverSsh(sshConfig, script) {
           `printf '%s' '${encoded}' | base64 -d > ${remotePath}`,
           `chmod 700 ${remotePath}`,
           `bash -n ${remotePath}`,
-          `bash ${remotePath}`
+          `bash ${remotePath} > /root/miniweed-tunnel-vps-setup.last.log 2>&1 || (cat /root/miniweed-tunnel-vps-setup.last.log && exit 1)`,
+          `cat /root/miniweed-tunnel-vps-setup.last.log`
         ].join(' && ');
 
         const result = await runRemoteCommand(ssh, cmd);

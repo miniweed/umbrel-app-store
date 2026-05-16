@@ -717,15 +717,19 @@ async function deployToVps(buttonEl) {
 
   buttonEl.disabled = true;
   msg.style.color = '#9ca3af';
-  msg.textContent = 'Desplegando script al VPS...';
+  msg.textContent = 'Desplegando script al VPS... (puede tardar varios minutos)';
   log.classList.add('hidden');
   log.textContent = '';
 
+  let timeoutId;
   try {
-    const res = await apiFetch('/api/deploy-vps', {
+    const controller = new AbortController();
+    timeoutId = setTimeout(() => controller.abort(), 25 * 60 * 1000);
+    const res = await fetch('/api/deploy-vps', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload),
+      signal: controller.signal
     });
     const data = await res.json();
 
@@ -749,8 +753,11 @@ async function deployToVps(buttonEl) {
     }
   } catch (e) {
     msg.style.color = '#f87171';
-    msg.textContent = 'Error de red o timeout al hacer deploy.';
+    msg.textContent = e && e.name === 'AbortError'
+      ? 'Timeout de red en la UI (10s). Revisa logs y reintenta.'
+      : 'Error de red o timeout al hacer deploy.';
   } finally {
+    if (timeoutId) clearTimeout(timeoutId);
     buttonEl.disabled = false;
   }
 }
