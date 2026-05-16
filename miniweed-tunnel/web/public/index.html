@@ -834,7 +834,7 @@ async function pollStatus() {
     if (data.connected) {
       badge.className = 'status-badge badge-connected';
       text.textContent = 'Conectado';
-    } else if (data.raw && data.raw.includes('wg0')) {
+    } else if ((data.peerCount || 0) > 0) {
       badge.className = 'status-badge badge-waiting';
       text.textContent = 'Conectando...';
     } else {
