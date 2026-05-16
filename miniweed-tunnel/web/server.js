@@ -466,6 +466,12 @@ function deployScriptOverSsh(sshConfig, script) {
   });
 }
 
+function extractVpsPublicKey(text) {
+  if (!text) return '';
+  const match = text.match(/VPS Public Key:\s*([A-Za-z0-9+/]{43}=)/);
+  return match ? match[1] : '';
+}
+
 function wgApi(urlPath) {
   return new Promise((resolve, reject) => {
     const req = http.request(
@@ -576,7 +582,29 @@ app.post('/api/deploy-vps', async (req, res) => {
       });
     }
 
-    return res.json({ ok: true, stdout: result.stdout, stderr: result.stderr });
+    const combinedOutput = `${result.stdout || ''}\n${result.stderr || ''}`;
+    const vpsPubKey = extractVpsPublicKey(combinedOutput);
+    let autoConfigured = false;
+
+    if (vpsPubKey) {
+      cfg.vpsPubKey = vpsPubKey;
+      saveConfig(cfg);
+
+      const wgConf = generateWgConf(cfg);
+      if (wgConf) {
+        fs.writeFileSync(WG_CONF, wgConf);
+        autoConfigured = true;
+      }
+      fs.writeFileSync(CADDYFILE, generateCaddyfile(cfg));
+    }
+
+    return res.json({
+      ok: true,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      vpsPubKey,
+      autoConfigured
+    });
   } catch (err) {
     return res.status(500).json({ error: `Fallo SSH: ${err.message}` });
   }

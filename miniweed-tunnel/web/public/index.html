@@ -745,7 +745,13 @@ async function deployToVps(buttonEl) {
     }
 
     msg.style.color = '#4ade80';
-    msg.textContent = 'Deploy ejecutado correctamente.';
+    if (data.autoConfigured) {
+      msg.textContent = 'Deploy ejecutado y clave VPS configurada automaticamente.';
+      await loadConfig();
+      updateSteps();
+    } else {
+      msg.textContent = 'Deploy ejecutado correctamente.';
+    }
     const details = [data.stdout, data.stderr].filter(Boolean).join('\n');
     if (details) {
       log.textContent = details;
