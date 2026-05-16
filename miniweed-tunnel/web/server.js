@@ -227,10 +227,10 @@ if command -v ufw >/dev/null 2>&1; then
   systemctl stop ufw >/dev/null 2>&1 || true
 fi
 
-apt-get update -qq
+apt-get -o DPkg::Lock::Timeout=300 update -qq
 echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
 echo iptables-persistent iptables-persistent/autosave_v6 boolean false | debconf-set-selections
-apt-get install -y -qq wireguard iptables iptables-persistent fail2ban unattended-upgrades
+apt-get -o DPkg::Lock::Timeout=300 install -y -qq wireguard iptables iptables-persistent fail2ban unattended-upgrades
 
 PUBLIC_IF=$(ip route show default | awk '/default/{print $5; exit}')
 if [ -z "$PUBLIC_IF" ]; then

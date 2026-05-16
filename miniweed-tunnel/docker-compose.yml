@@ -7,7 +7,7 @@ services:
       PROXY_AUTH_ADD: "true"
 
   web:
-    image: ghcr.io/miniweed/umbrel-tunnel-web:1.3.8@sha256:c6bb2f715e18b3c57b80831d352d68272f74825dae2a5263bb701e07e2e4ca97
+    image: ghcr.io/miniweed/umbrel-tunnel-web:1.3.10@sha256:e61010dcdd5cd22c94287d1ba1baf57629f7b178bedfe67bf25fddd5b94f196a
     restart: on-failure
     stop_grace_period: 30s
     volumes:
