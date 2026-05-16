@@ -165,32 +165,132 @@ function generateVpsScript(cfg) {
   return `#!/bin/bash
 # Umbrel Tunnel — VPS Setup
 # Ejecutar como root en un VPS Debian/Ubuntu
+# VPS dedicado exclusivamente a reverse proxy
 
-set -e
+set -euo pipefail
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Este script debe ejecutarse como root"
+  exit 1
+fi
+
+export DEBIAN_FRONTEND=noninteractive
+
+if command -v ufw >/dev/null 2>&1; then
+  ufw disable >/dev/null 2>&1 || true
+  systemctl disable ufw >/dev/null 2>&1 || true
+  systemctl stop ufw >/dev/null 2>&1 || true
+fi
+
 apt-get update -qq
-apt-get install -y -qq wireguard iptables
+echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
+echo iptables-persistent iptables-persistent/autosave_v6 boolean false | debconf-set-selections
+apt-get install -y -qq wireguard iptables iptables-persistent fail2ban unattended-upgrades
+
+PUBLIC_IF=$(ip route show default | awk '/default/{print $5; exit}')
+if [ -z "$PUBLIC_IF" ]; then
+  echo "No se pudo detectar la interfaz de red publica"
+  exit 1
+fi
+
+SSH_PORT=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}')
+if [ -z "$SSH_PORT" ]; then
+  SSH_PORT=$(awk '/^[[:space:]]*Port[[:space:]]+[0-9]+/{print $2; exit}' /etc/ssh/sshd_config 2>/dev/null || true)
+fi
+[ -z "$SSH_PORT" ] && SSH_PORT=22
+
+WG_PORT=${cfg.vpsPort}
+WG_CLIENT_IP=${cfg.tunnelClientIp}
+
+mkdir -p /root/miniweed-backups
+BACKUP_FILE="/root/miniweed-backups/iptables-before-$(date +%s).rules"
+iptables-save > "$BACKUP_FILE"
+
+cat > /root/miniweed-rollback-firewall.sh <<ROLLBACKEOF
+#!/bin/bash
+set -euo pipefail
+LATEST=$(ls -1t /root/miniweed-backups/iptables-before-*.rules 2>/dev/null | head -1)
+if [ -z "$LATEST" ]; then
+  echo "No hay backup de firewall para restaurar"
+  exit 1
+fi
+iptables-restore < "$LATEST"
+echo "Restaurado firewall desde $LATEST"
+ROLLBACKEOF
+chmod 700 /root/miniweed-rollback-firewall.sh
+
+# Hardening de red del host
+cat > /etc/sysctl.d/99-miniweed-tunnel-hardening.conf <<SYSCTLEOF
+net.ipv4.ip_forward=1
+net.ipv4.conf.all.rp_filter=1
+net.ipv4.conf.default.rp_filter=1
+net.ipv4.conf.all.accept_redirects=0
+net.ipv4.conf.default.accept_redirects=0
+net.ipv4.conf.all.send_redirects=0
+net.ipv4.conf.default.send_redirects=0
+net.ipv4.icmp_echo_ignore_broadcasts=1
+net.ipv4.tcp_syncookies=1
+SYSCTLEOF
+sysctl --system >/dev/null
+
+# Firewall estricto para VPS dedicado
+iptables -w -t nat -F
+iptables -w -F
+iptables -w -X
+iptables -w -P INPUT DROP
+iptables -w -P FORWARD DROP
+iptables -w -P OUTPUT ACCEPT
+
+iptables -w -A INPUT -i lo -j ACCEPT
+iptables -w -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -w -A INPUT -p tcp --dport "$SSH_PORT" -j ACCEPT
+iptables -w -A INPUT -p udp --dport "$WG_PORT" -j ACCEPT
+iptables -w -A INPUT -p icmp --icmp-type echo-request -m limit --limit 10/second --limit-burst 20 -j ACCEPT
+
+iptables -w -t nat -A PREROUTING -i "$PUBLIC_IF" -p tcp --dport 80 -j DNAT --to-destination "$WG_CLIENT_IP:80"
+iptables -w -t nat -A PREROUTING -i "$PUBLIC_IF" -p tcp --dport 443 -j DNAT --to-destination "$WG_CLIENT_IP:443"
+iptables -w -t nat -A POSTROUTING -o "$PUBLIC_IF" -j MASQUERADE
+
+iptables -w -A FORWARD -i "$PUBLIC_IF" -o wg0 -p tcp -d "$WG_CLIENT_IP" --dport 80 -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
+iptables -w -A FORWARD -i "$PUBLIC_IF" -o wg0 -p tcp -d "$WG_CLIENT_IP" --dport 443 -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
+iptables -w -A FORWARD -i wg0 -o "$PUBLIC_IF" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+iptables-save > /etc/iptables/rules.v4
+systemctl enable netfilter-persistent >/dev/null 2>&1 || true
+systemctl restart netfilter-persistent >/dev/null 2>&1 || true
+
+# Fail2ban para SSH
+mkdir -p /etc/fail2ban/jail.d
+cat > /etc/fail2ban/jail.d/sshd.local <<FAIL2BANEOF
+[sshd]
+enabled = true
+backend = systemd
+maxretry = 5
+findtime = 10m
+bantime = 1h
+FAIL2BANEOF
+systemctl enable fail2ban >/dev/null 2>&1 || true
+systemctl restart fail2ban >/dev/null 2>&1 || true
+
+# Actualizaciones de seguridad automáticas
+systemctl enable unattended-upgrades >/dev/null 2>&1 || true
+systemctl restart unattended-upgrades >/dev/null 2>&1 || true
 
 VPS_PRIV=$(wg genkey)
 VPS_PUB=$(echo "$VPS_PRIV" | wg pubkey)
-ETH=$(ip route show default | awk '/default/{print $5}' | head -1)
 
 cat > /etc/wireguard/wg0.conf <<WGEOF
 [Interface]
 Address = ${cfg.tunnelServerIp}/24
 ListenPort = ${cfg.vpsPort}
 PrivateKey = $VPS_PRIV
-PostUp   = iptables -t nat -A PREROUTING -i $ETH -p tcp --dport 80  -j DNAT --to-destination ${cfg.tunnelClientIp}:80
-PostUp   = iptables -t nat -A PREROUTING -i $ETH -p tcp --dport 443 -j DNAT --to-destination ${cfg.tunnelClientIp}:443
-PostUp   = iptables -t nat -A POSTROUTING -j MASQUERADE
-PostUp   = sysctl -w net.ipv4.ip_forward=1
-PreDown  = iptables -t nat -D PREROUTING -i $ETH -p tcp --dport 80  -j DNAT --to-destination ${cfg.tunnelClientIp}:80
-PreDown  = iptables -t nat -D PREROUTING -i $ETH -p tcp --dport 443 -j DNAT --to-destination ${cfg.tunnelClientIp}:443
-PreDown  = iptables -t nat -D POSTROUTING -j MASQUERADE
 
 [Peer]
 PublicKey = ${cfg.publicKey}
 AllowedIPs = ${cfg.tunnelClientIp}/32
 WGEOF
+
+chmod 600 /etc/wireguard/wg0.conf
 
 systemctl enable wg-quick@wg0
 systemctl start wg-quick@wg0
@@ -199,6 +299,9 @@ echo ""
 echo "=============================================="
 echo " VPS Public Key: $VPS_PUB"
 echo "=============================================="
+echo " SSH PORT permitido: $SSH_PORT"
+echo " Backup firewall: $BACKUP_FILE"
+echo " Rollback script: /root/miniweed-rollback-firewall.sh"
 echo " Pega esta clave en Umbrel Tunnel y listo."
 `;
 }
