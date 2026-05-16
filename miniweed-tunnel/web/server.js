@@ -211,6 +211,7 @@ function generateVpsScript(cfg) {
 # VPS dedicado exclusivamente a reverse proxy
 
 set -euo pipefail
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "Este script debe ejecutarse como root"
@@ -236,7 +237,7 @@ if [ -z "$PUBLIC_IF" ]; then
   exit 1
 fi
 
-SSH_PORT=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}')
+SSH_PORT=$(/usr/sbin/sshd -T 2>/dev/null | awk '/^port /{print $2; exit}' || true)
 if [ -z "$SSH_PORT" ]; then
   SSH_PORT=$(awk '/^[[:space:]]*Port[[:space:]]+[0-9]+/{print $2; exit}' /etc/ssh/sshd_config 2>/dev/null || true)
 fi
@@ -446,6 +447,12 @@ function deployScriptOverSsh(sshConfig, script) {
 
         const result = await runRemoteCommand(ssh, cmd);
         ssh.end();
+        if (result.code !== 0) {
+          const err = new Error(`Comando remoto terminó con código ${result.code}`);
+          err.stdout = result.stdout;
+          err.stderr = result.stderr;
+          return reject(err);
+        }
         resolve(result);
       } catch (err) {
         ssh.end();
@@ -572,6 +579,9 @@ app.post('/api/deploy-vps', async (req, res) => {
   const script = generateVpsScript(cfg);
 
   try {
+    // Quick SSH preflight to provide clearer errors
+    await deployScriptOverSsh(parsed, '#!/bin/bash\nset -e\necho "SSH preflight OK"\n');
+
     const result = await deployScriptOverSsh(parsed, script);
     if (result.code !== 0) {
       return res.status(500).json({
@@ -606,7 +616,11 @@ app.post('/api/deploy-vps', async (req, res) => {
       autoConfigured
     });
   } catch (err) {
-    return res.status(500).json({ error: `Fallo SSH: ${err.message}` });
+    return res.status(500).json({
+      error: `Fallo SSH: ${err.message}`,
+      stdout: err.stdout || '',
+      stderr: err.stderr || ''
+    });
   }
 });
 
