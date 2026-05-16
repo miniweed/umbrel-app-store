@@ -419,7 +419,7 @@
       </div>
       <div class="field">
         <label>Clave privada SSH (PEM/OpenSSH)</label>
-        <textarea id="sshPrivateKey" style="width:100%;min-height:140px;background:#0d0d0d;border:1px solid #333;border-radius:8px;padding:10px;color:#e5e5e5;font-family:monospace;font-size:12px"></textarea>
+        <textarea id="sshPrivateKey" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" style="width:100%;min-height:140px;background:#0d0d0d;border:1px solid #333;border-radius:8px;padding:10px;color:#e5e5e5;font-family:monospace;font-size:12px"></textarea>
       </div>
       <div class="btn-row">
         <button class="btn btn-primary" onclick="deployToVps(this)">Ejecutar deploy</button>
@@ -730,6 +730,8 @@ function openDeployModal() {
 }
 
 function closeDeployModal() {
+  const keyEl = document.getElementById('sshPrivateKey');
+  if (keyEl) keyEl.value = '';
   document.getElementById('deploy-modal').classList.add('hidden');
 }
 
@@ -836,6 +838,9 @@ async function deployToVps(buttonEl) {
       ? 'Timeout de red en la UI (25m). Revisa logs y reintenta.'
       : 'Error de red o timeout al hacer deploy.';
   } finally {
+    const keyEl = document.getElementById('sshPrivateKey');
+    if (keyEl) keyEl.value = '';
+    payload.privateKey = '';
     if (timeoutId) clearTimeout(timeoutId);
     buttonEl.disabled = false;
   }
