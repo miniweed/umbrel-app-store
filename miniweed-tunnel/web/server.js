@@ -241,7 +241,7 @@ if [ -z "$SSH_PORT" ]; then
 fi
 [ -z "$SSH_PORT" ] && SSH_PORT=22
 
-if ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)${SSH_PORT}$"; then
+if ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)\${SSH_PORT}$"; then
   echo "No se detecta sshd escuchando en el puerto $SSH_PORT. Abortando para evitar lockout."
   exit 1
 fi
