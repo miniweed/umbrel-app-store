@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const { Client } = require('ssh2');
 
 const app = express();
 const DATA_DIR = process.env.DATA_DIR || '/data';
@@ -370,6 +371,93 @@ echo " Pega esta clave en Umbrel Tunnel y listo."
 `;
 }
 
+function validateSshDeployInput(input) {
+  const host = (input.sshHost || '').trim();
+  const user = (input.sshUser || 'root').trim();
+  const port = parseInt(input.sshPort, 10) || 22;
+  const privateKey = input.privateKey || '';
+  const passphrase = input.passphrase || '';
+
+  if (!host) return { error: 'SSH host requerido' };
+  if (!user) return { error: 'SSH user requerido' };
+  if (port < 1 || port > 65535) return { error: 'SSH port inválido' };
+  if (!privateKey.includes('BEGIN') || !privateKey.includes('PRIVATE KEY')) {
+    return { error: 'Clave privada SSH inválida' };
+  }
+
+  return {
+    host,
+    user,
+    port,
+    privateKey,
+    passphrase
+  };
+}
+
+function runRemoteCommand(ssh, command, timeoutMs = 8 * 60 * 1000) {
+  return new Promise((resolve, reject) => {
+    let stdout = '';
+    let stderr = '';
+
+    ssh.exec(command, (err, stream) => {
+      if (err) return reject(err);
+
+      const timer = setTimeout(() => {
+        stream.close();
+        reject(new Error('Timeout ejecutando comando remoto'));
+      }, timeoutMs);
+
+      stream.on('close', code => {
+        clearTimeout(timer);
+        resolve({ code, stdout, stderr });
+      });
+
+      stream.on('data', data => {
+        stdout += data.toString();
+      });
+
+      stream.stderr.on('data', data => {
+        stderr += data.toString();
+      });
+    });
+  });
+}
+
+function deployScriptOverSsh(sshConfig, script) {
+  return new Promise((resolve, reject) => {
+    const ssh = new Client();
+    ssh.on('ready', async () => {
+      try {
+        const encoded = Buffer.from(script, 'utf8').toString('base64');
+        const remotePath = '/root/miniweed-tunnel-vps-setup.sh';
+        const cmd = [
+          `printf '%s' '${encoded}' | base64 -d > ${remotePath}`,
+          `chmod 700 ${remotePath}`,
+          `bash -n ${remotePath}`,
+          `bash ${remotePath}`
+        ].join(' && ');
+
+        const result = await runRemoteCommand(ssh, cmd);
+        ssh.end();
+        resolve(result);
+      } catch (err) {
+        ssh.end();
+        reject(err);
+      }
+    });
+
+    ssh.on('error', reject);
+    ssh.connect({
+      host: sshConfig.host,
+      port: sshConfig.port,
+      username: sshConfig.user,
+      privateKey: sshConfig.privateKey,
+      passphrase: sshConfig.passphrase || undefined,
+      readyTimeout: 20000
+    });
+  });
+}
+
 function wgApi(urlPath) {
   return new Promise((resolve, reject) => {
     const req = http.request(
@@ -454,6 +542,36 @@ app.get('/api/vps-setup', (req, res) => {
     return res.status(400).json({ error: 'Configura la IP del VPS y genera las claves primero' });
   }
   res.json({ script: generateVpsScript(cfg) });
+});
+
+app.post('/api/deploy-vps', async (req, res) => {
+  const cfg = loadConfig();
+  if (!cfg.publicKey || !cfg.vpsIp) {
+    return res.status(400).json({ error: 'Configura la IP del VPS y genera las claves primero' });
+  }
+
+  const parsed = validateSshDeployInput(req.body || {});
+  if (parsed.error) {
+    return res.status(400).json({ error: parsed.error });
+  }
+
+  const script = generateVpsScript(cfg);
+
+  try {
+    const result = await deployScriptOverSsh(parsed, script);
+    if (result.code !== 0) {
+      return res.status(500).json({
+        error: 'Error ejecutando script en VPS',
+        stdout: result.stdout,
+        stderr: result.stderr,
+        code: result.code
+      });
+    }
+
+    return res.json({ ok: true, stdout: result.stdout, stderr: result.stderr });
+  } catch (err) {
+    return res.status(500).json({ error: `Fallo SSH: ${err.message}` });
+  }
 });
 
 // ── boot ─────────────────────────────────────────────────────────────────────

@@ -366,8 +366,41 @@
         <div class="btn-row mt-2">
           <button class="btn btn-secondary btn-sm" onclick="copyScript(this)">Copiar script</button>
           <button class="btn btn-secondary btn-sm" onclick="downloadScript(this)">Descargar .sh</button>
+          <button class="btn btn-primary btn-sm" onclick="openDeployModal()">Deploy directo por SSH</button>
         </div>
       </div>
+    </div>
+
+    <div id="deploy-modal" class="card hidden">
+      <div class="card-title">Deploy directo al VPS (experimental)</div>
+      <div class="field">
+        <label>Host/IP SSH</label>
+        <input type="text" id="sshHost" placeholder="80.71.235.230">
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>Usuario SSH</label>
+          <input type="text" id="sshUser" value="root">
+        </div>
+        <div class="field">
+          <label>Puerto SSH</label>
+          <input type="number" id="sshPort" value="22" min="1" max="65535">
+        </div>
+      </div>
+      <div class="field">
+        <label>Clave privada SSH (PEM/OpenSSH)</label>
+        <textarea id="sshPrivateKey" style="width:100%;min-height:140px;background:#0d0d0d;border:1px solid #333;border-radius:8px;padding:10px;color:#e5e5e5;font-family:monospace;font-size:12px"></textarea>
+      </div>
+      <div class="field">
+        <label>Passphrase (si aplica)</label>
+        <input type="text" id="sshPassphrase" placeholder="Opcional">
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="deployToVps(this)">Ejecutar deploy</button>
+        <button class="btn btn-secondary" onclick="closeDeployModal()">Cancelar</button>
+      </div>
+      <p id="deploy-msg" class="text-sm mt-2"></p>
+      <div id="deploy-log" class="status-raw hidden" style="margin-top:12px"></div>
     </div>
 
     <div class="card">
@@ -646,6 +679,74 @@ function downloadScript(buttonEl) {
     setTimeout(() => {
       buttonEl.textContent = 'Descargar .sh';
     }, 1500);
+  }
+}
+
+function openDeployModal() {
+  document.getElementById('sshHost').value = cfg.vpsIp || '';
+  document.getElementById('deploy-msg').textContent = '';
+  document.getElementById('deploy-log').classList.add('hidden');
+  document.getElementById('deploy-modal').classList.remove('hidden');
+}
+
+function closeDeployModal() {
+  document.getElementById('deploy-modal').classList.add('hidden');
+}
+
+async function deployToVps(buttonEl) {
+  const msg = document.getElementById('deploy-msg');
+  const log = document.getElementById('deploy-log');
+  const payload = {
+    sshHost: document.getElementById('sshHost').value.trim(),
+    sshUser: document.getElementById('sshUser').value.trim(),
+    sshPort: parseInt(document.getElementById('sshPort').value, 10) || 22,
+    privateKey: document.getElementById('sshPrivateKey').value,
+    passphrase: document.getElementById('sshPassphrase').value
+  };
+
+  if (!payload.sshHost || !payload.privateKey) {
+    msg.style.color = '#f87171';
+    msg.textContent = 'Host y clave privada son obligatorios.';
+    return;
+  }
+
+  buttonEl.disabled = true;
+  msg.style.color = '#9ca3af';
+  msg.textContent = 'Desplegando script al VPS...';
+  log.classList.add('hidden');
+  log.textContent = '';
+
+  try {
+    const res = await apiFetch('/api/deploy-vps', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      msg.style.color = '#f87171';
+      msg.textContent = data.error || 'Falló el deploy remoto';
+      const details = [data.stdout, data.stderr].filter(Boolean).join('\n');
+      if (details) {
+        log.textContent = details;
+        log.classList.remove('hidden');
+      }
+      return;
+    }
+
+    msg.style.color = '#4ade80';
+    msg.textContent = 'Deploy ejecutado correctamente.';
+    const details = [data.stdout, data.stderr].filter(Boolean).join('\n');
+    if (details) {
+      log.textContent = details;
+      log.classList.remove('hidden');
+    }
+  } catch (e) {
+    msg.style.color = '#f87171';
+    msg.textContent = 'Error de red o timeout al hacer deploy.';
+  } finally {
+    buttonEl.disabled = false;
   }
 }
 
