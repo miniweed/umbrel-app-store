@@ -444,19 +444,15 @@
         <div class="step-sep">→</div>
         <div class="step" id="step-3">
           <div class="step-num">3</div>
-          <span>Ejecutar script en VPS</span>
+          <span>Ejecutar script o deploy SSH</span>
         </div>
         <div class="step-sep">→</div>
         <div class="step" id="step-4">
           <div class="step-num">4</div>
-          <span>Pegar clave VPS</span>
-        </div>
-        <div class="step-sep">→</div>
-        <div class="step" id="step-5">
-          <div class="step-num">5</div>
-          <span>Guardar y listo</span>
+          <span>Guardar configuración y listo</span>
         </div>
       </div>
+      <p class="text-sm">La clave pública del VPS se rellena automáticamente cuando usas deploy SSH.</p>
     </div>
 
   </div>
@@ -856,8 +852,7 @@ function updateSteps() {
   setStep(1, hasKeys);
   setStep(2, hasKeys && hasVpsIp);
   setStep(3, hasKeys && hasVpsIp);
-  setStep(4, hasKeys && hasVpsIp && hasVpsPub);
-  setStep(5, hasKeys && hasVpsIp && hasVpsPub && hasConfig);
+  setStep(4, hasKeys && hasVpsIp && hasVpsPub && hasConfig);
 }
 
 function setStep(n, done) {
