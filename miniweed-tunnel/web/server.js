@@ -7,6 +7,7 @@ const app = express();
 const DATA_DIR = process.env.DATA_DIR || '/data';
 const WG_API_HOST = process.env.WG_API_HOST || 'wg';
 const WG_API_PORT = 8080;
+const API_AUTH_TOKEN = process.env.TUNNEL_API_TOKEN || '';
 
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const WG_CONF = path.join(DATA_DIR, 'wg0.conf');
@@ -27,8 +28,49 @@ const DEFAULT_CONFIG = {
 
 const DEFAULT_CADDYFILE = ':80 {\n  respond "Umbrel Tunnel — not configured yet"\n}\n';
 
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.json({ limit: '32kb' }));
+
+const apiRateWindowMs = 60 * 1000;
+const apiRateMax = 120;
+const apiRateStore = new Map();
+
+function apiRateLimit(req, res, next) {
+  const now = Date.now();
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  const entry = apiRateStore.get(ip);
+
+  if (!entry || now > entry.resetAt) {
+    apiRateStore.set(ip, { count: 1, resetAt: now + apiRateWindowMs });
+    return next();
+  }
+
+  entry.count += 1;
+  if (entry.count > apiRateMax) {
+    return res.status(429).json({ error: 'Demasiadas peticiones, prueba de nuevo en un minuto' });
+  }
+
+  return next();
+}
+
+function requireApiAuth(req, res, next) {
+  if (!API_AUTH_TOKEN) return next();
+  const token = req.get('x-tunnel-api-token');
+  if (token !== API_AUTH_TOKEN) {
+    return res.status(401).json({ error: 'No autorizado' });
+  }
+  return next();
+}
+
+app.use('/api', apiRateLimit, requireApiAuth);
+app.use(express.static(path.join(__dirname, 'public'), { index: false }));
+
+app.get(['/', '/index.html'], (req, res) => {
+  const indexPath = path.join(__dirname, 'public', 'index.html');
+  let html = fs.readFileSync(indexPath, 'utf8');
+  html = html.replace('__TUNNEL_API_TOKEN__', JSON.stringify(API_AUTH_TOKEN));
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
+});
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -199,6 +241,11 @@ if [ -z "$SSH_PORT" ]; then
 fi
 [ -z "$SSH_PORT" ] && SSH_PORT=22
 
+if ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)${SSH_PORT}$"; then
+  echo "No se detecta sshd escuchando en el puerto $SSH_PORT. Abortando para evitar lockout."
+  exit 1
+fi
+
 WG_PORT=${cfg.vpsPort}
 WG_CLIENT_IP=${cfg.tunnelClientIp}
 
@@ -218,6 +265,11 @@ iptables-restore < "$LATEST"
 echo "Restaurado firewall desde $LATEST"
 ROLLBACKEOF
 chmod 700 /root/miniweed-rollback-firewall.sh
+
+ROLLBACK_FLAG=/root/miniweed-firewall-ok
+rm -f "$ROLLBACK_FLAG"
+( sleep 120; [ -f "$ROLLBACK_FLAG" ] || /root/miniweed-rollback-firewall.sh ) &
+ROLLBACK_PID=$!
 
 # Hardening de red del host
 cat > /etc/sysctl.d/99-miniweed-tunnel-hardening.conf <<SYSCTLEOF
@@ -294,6 +346,15 @@ chmod 600 /etc/wireguard/wg0.conf
 
 systemctl enable wg-quick@wg0
 systemctl start wg-quick@wg0
+
+if ! systemctl is-active --quiet wg-quick@wg0; then
+  /root/miniweed-rollback-firewall.sh || true
+  echo "WireGuard no arrancó correctamente. Firewall restaurado."
+  exit 1
+fi
+
+touch "$ROLLBACK_FLAG"
+kill "$ROLLBACK_PID" 2>/dev/null || true
 
 echo ""
 echo "=============================================="

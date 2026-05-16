@@ -7,7 +7,7 @@ services:
       PROXY_AUTH_ADD: "true"
 
   web:
-    image: ghcr.io/miniweed/umbrel-tunnel-web:1.2.0@sha256:dfafa67a078566d93f039e9fc3c22136d69adb0a06a8299f0446c037e7d2cb1a
+    image: ghcr.io/miniweed/umbrel-tunnel-web:1.2.1@sha256:b43bd143ae7a38f0e9e97f1c944722a6ef15d295024b7ce3ba489c7a7db749a1
     restart: on-failure
     stop_grace_period: 30s
     volumes:
@@ -16,6 +16,7 @@ services:
       - DATA_DIR=/data
       - WG_API_HOST=wg
       - PORT=3016
+      - TUNNEL_API_TOKEN=${APP_SEED}
 
   caddy:
     image: caddy:2.8-alpine@sha256:af32e97399febea808609119bb21544d0265c58a02836576e32a2d082c262c17

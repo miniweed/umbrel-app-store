@@ -4,7 +4,7 @@ name: Tunnel
 tagline: Expón tu servidor al mundo sin tocar el router
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.png
 category: networking
-version: "1.2.0"
+version: "1.2.1"
 port: 3016
 description: >-
   Conecta tu Umbrel a un VPS propio y expón servicios a internet sin abrir puertos
@@ -17,6 +17,6 @@ repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
 releaseNotes: >-
-  Hardening del VPS dedicado: firewall estricto, fail2ban, unattended-upgrades, sysctl y backup/rollback de iptables.
+  Seguridad reforzada: auth interna para API, rate limit, timeout en frontend y protecciones anti-lockout en script VPS.
 dependencies: []
 defaultPassword: ""
