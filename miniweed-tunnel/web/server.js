@@ -277,8 +277,8 @@ ROLLBACK_PID=$!
 # Hardening de red del host
 cat > /etc/sysctl.d/99-miniweed-tunnel-hardening.conf <<SYSCTLEOF
 net.ipv4.ip_forward=1
-net.ipv4.conf.all.rp_filter=1
-net.ipv4.conf.default.rp_filter=1
+net.ipv4.conf.all.rp_filter=2
+net.ipv4.conf.default.rp_filter=2
 net.ipv4.conf.all.accept_redirects=0
 net.ipv4.conf.default.accept_redirects=0
 net.ipv4.conf.all.send_redirects=0
@@ -299,6 +299,8 @@ iptables -w -X
 iptables -w -A INPUT -i lo -j ACCEPT
 iptables -w -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 iptables -w -A INPUT -p tcp --dport "$SSH_PORT" -j ACCEPT
+iptables -w -A INPUT -p tcp --dport 80 -j ACCEPT
+iptables -w -A INPUT -p tcp --dport 443 -j ACCEPT
 iptables -w -A INPUT -p udp --dport "$WG_PORT" -j ACCEPT
 iptables -w -A INPUT -p icmp --icmp-type echo-request -m limit --limit 10/second --limit-burst 20 -j ACCEPT
 
