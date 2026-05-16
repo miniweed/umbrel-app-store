@@ -306,6 +306,9 @@ iptables -w -A INPUT -p icmp --icmp-type echo-request -m limit --limit 10/second
 
 iptables -w -t nat -A PREROUTING -p tcp --dport 80 -j DNAT --to-destination "$WG_CLIENT_IP:80"
 iptables -w -t nat -A PREROUTING -p tcp --dport 443 -j DNAT --to-destination "$WG_CLIENT_IP:443"
+# Evita retorno asimetrico: SNAT al lado WG para que Umbrel responda por el tunel
+iptables -w -t nat -A POSTROUTING -o wg0 -p tcp -d "$WG_CLIENT_IP" --dport 80 -j MASQUERADE
+iptables -w -t nat -A POSTROUTING -o wg0 -p tcp -d "$WG_CLIENT_IP" --dport 443 -j MASQUERADE
 iptables -w -t nat -A POSTROUTING -o "$PUBLIC_IF" -j MASQUERADE
 
 iptables -w -A FORWARD -p tcp -d "$WG_CLIENT_IP" --dport 80 -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
