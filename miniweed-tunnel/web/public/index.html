@@ -744,23 +744,57 @@ async function deployToVps(buttonEl) {
       return;
     }
 
-    msg.style.color = '#4ade80';
-    if (data.autoConfigured) {
-      msg.textContent = 'Deploy ejecutado y clave VPS configurada automaticamente.';
-      await loadConfig();
-      updateSteps();
-    } else {
-      msg.textContent = 'Deploy ejecutado correctamente.';
+    const jobId = data.jobId;
+    if (!jobId) {
+      msg.style.color = '#f87171';
+      msg.textContent = 'No se recibió jobId del deploy remoto.';
+      return;
     }
-    const details = [data.stdout, data.stderr].filter(Boolean).join('\n');
-    if (details) {
-      log.textContent = details;
-      log.classList.remove('hidden');
+
+    msg.style.color = '#9ca3af';
+    msg.textContent = 'Deploy en progreso en el VPS...';
+
+    while (true) {
+      await new Promise(r => setTimeout(r, 2000));
+      const statusRes = await apiFetch(`/api/deploy-vps/${jobId}`);
+      const status = await statusRes.json();
+
+      const details = [status.stdout, status.stderr].filter(Boolean).join('\n');
+      if (details) {
+        log.textContent = details;
+        log.classList.remove('hidden');
+      }
+
+      if (status.status === 'running') {
+        continue;
+      }
+
+      if (status.status === 'error') {
+        msg.style.color = '#f87171';
+        msg.textContent = status.error || 'Error ejecutando script en VPS';
+        return;
+      }
+
+      if (status.status === 'success') {
+        msg.style.color = '#4ade80';
+        if (status.autoConfigured) {
+          msg.textContent = 'Deploy ejecutado y clave VPS configurada automaticamente.';
+          await loadConfig();
+          updateSteps();
+        } else {
+          msg.textContent = 'Deploy ejecutado correctamente.';
+        }
+        return;
+      }
+
+      msg.style.color = '#f87171';
+      msg.textContent = 'Estado de deploy desconocido.';
+      return;
     }
   } catch (e) {
     msg.style.color = '#f87171';
     msg.textContent = e && e.name === 'AbortError'
-      ? 'Timeout de red en la UI (10s). Revisa logs y reintenta.'
+      ? 'Timeout de red en la UI (25m). Revisa logs y reintenta.'
       : 'Error de red o timeout al hacer deploy.';
   } finally {
     if (timeoutId) clearTimeout(timeoutId);

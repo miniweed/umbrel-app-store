@@ -9,6 +9,7 @@ const DATA_DIR = process.env.DATA_DIR || '/data';
 const WG_API_HOST = process.env.WG_API_HOST || 'wg';
 const WG_API_PORT = 8080;
 const API_AUTH_TOKEN = process.env.TUNNEL_API_TOKEN || '';
+const deployJobs = new Map();
 
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const WG_CONF = path.join(DATA_DIR, 'wg0.conf');
@@ -577,51 +578,71 @@ app.post('/api/deploy-vps', async (req, res) => {
   }
 
   const script = generateVpsScript(cfg);
+  const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-  try {
-    // Quick SSH preflight to provide clearer errors
-    await deployScriptOverSsh(parsed, '#!/bin/bash\nset -e\necho "SSH preflight OK"\n');
+  deployJobs.set(jobId, {
+    status: 'running',
+    startedAt: Date.now(),
+    error: '',
+    stdout: '',
+    stderr: '',
+    vpsPubKey: '',
+    autoConfigured: false
+  });
 
-    const result = await deployScriptOverSsh(parsed, script);
-    if (result.code !== 0) {
-      return res.status(500).json({
-        error: 'Error ejecutando script en VPS',
-        stdout: result.stdout,
-        stderr: result.stderr,
-        code: result.code
+  (async () => {
+    try {
+      await deployScriptOverSsh(parsed, '#!/bin/bash\nset -e\necho "SSH preflight OK"\n');
+      const result = await deployScriptOverSsh(parsed, script);
+
+      const combinedOutput = `${result.stdout || ''}\n${result.stderr || ''}`;
+      const vpsPubKey = extractVpsPublicKey(combinedOutput);
+      let autoConfigured = false;
+
+      if (vpsPubKey) {
+        const freshCfg = loadConfig();
+        freshCfg.vpsPubKey = vpsPubKey;
+        saveConfig(freshCfg);
+
+        const wgConf = generateWgConf(freshCfg);
+        if (wgConf) {
+          fs.writeFileSync(WG_CONF, wgConf);
+          autoConfigured = true;
+        }
+        fs.writeFileSync(CADDYFILE, generateCaddyfile(freshCfg));
+      }
+
+      deployJobs.set(jobId, {
+        status: 'success',
+        startedAt: deployJobs.get(jobId)?.startedAt || Date.now(),
+        finishedAt: Date.now(),
+        error: '',
+        stdout: result.stdout || '',
+        stderr: result.stderr || '',
+        vpsPubKey,
+        autoConfigured
+      });
+    } catch (err) {
+      deployJobs.set(jobId, {
+        status: 'error',
+        startedAt: deployJobs.get(jobId)?.startedAt || Date.now(),
+        finishedAt: Date.now(),
+        error: `Fallo SSH: ${err.message}`,
+        stdout: err.stdout || '',
+        stderr: err.stderr || ''
       });
     }
+  })();
 
-    const combinedOutput = `${result.stdout || ''}\n${result.stderr || ''}`;
-    const vpsPubKey = extractVpsPublicKey(combinedOutput);
-    let autoConfigured = false;
+  return res.status(202).json({ ok: true, jobId });
+});
 
-    if (vpsPubKey) {
-      cfg.vpsPubKey = vpsPubKey;
-      saveConfig(cfg);
-
-      const wgConf = generateWgConf(cfg);
-      if (wgConf) {
-        fs.writeFileSync(WG_CONF, wgConf);
-        autoConfigured = true;
-      }
-      fs.writeFileSync(CADDYFILE, generateCaddyfile(cfg));
-    }
-
-    return res.json({
-      ok: true,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      vpsPubKey,
-      autoConfigured
-    });
-  } catch (err) {
-    return res.status(500).json({
-      error: `Fallo SSH: ${err.message}`,
-      stdout: err.stdout || '',
-      stderr: err.stderr || ''
-    });
+app.get('/api/deploy-vps/:jobId', (req, res) => {
+  const job = deployJobs.get(req.params.jobId);
+  if (!job) {
+    return res.status(404).json({ error: 'Job no encontrado' });
   }
+  return res.json(job);
 });
 
 // ── boot ─────────────────────────────────────────────────────────────────────
