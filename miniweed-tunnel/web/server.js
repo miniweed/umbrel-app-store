@@ -256,7 +256,7 @@ mkdir -p /root/miniweed-backups
 BACKUP_FILE="/root/miniweed-backups/iptables-before-$(date +%s).rules"
 iptables-save > "$BACKUP_FILE"
 
-cat > /root/miniweed-rollback-firewall.sh <<ROLLBACKEOF
+cat > /root/miniweed-rollback-firewall.sh <<'ROLLBACKEOF'
 #!/bin/bash
 set -euo pipefail
 LATEST=$(ls -1t /root/miniweed-backups/iptables-before-*.rules 2>/dev/null | head -1)
