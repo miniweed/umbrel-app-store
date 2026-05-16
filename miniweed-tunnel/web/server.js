@@ -285,13 +285,13 @@ net.ipv4.tcp_syncookies=1
 SYSCTLEOF
 sysctl --system >/dev/null
 
-# Firewall estricto para VPS dedicado
+# Firewall estricto para VPS dedicado (sin cortar la sesion SSH activa)
+iptables -w -P INPUT ACCEPT
+iptables -w -P FORWARD ACCEPT
+iptables -w -P OUTPUT ACCEPT
 iptables -w -t nat -F
 iptables -w -F
 iptables -w -X
-iptables -w -P INPUT DROP
-iptables -w -P FORWARD DROP
-iptables -w -P OUTPUT ACCEPT
 
 iptables -w -A INPUT -i lo -j ACCEPT
 iptables -w -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
@@ -306,6 +306,9 @@ iptables -w -t nat -A POSTROUTING -o "$PUBLIC_IF" -j MASQUERADE
 iptables -w -A FORWARD -i "$PUBLIC_IF" -o wg0 -p tcp -d "$WG_CLIENT_IP" --dport 80 -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
 iptables -w -A FORWARD -i "$PUBLIC_IF" -o wg0 -p tcp -d "$WG_CLIENT_IP" --dport 443 -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
 iptables -w -A FORWARD -i wg0 -o "$PUBLIC_IF" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+iptables -w -P INPUT DROP
+iptables -w -P FORWARD DROP
 
 iptables-save > /etc/iptables/rules.v4
 systemctl enable netfilter-persistent >/dev/null 2>&1 || true

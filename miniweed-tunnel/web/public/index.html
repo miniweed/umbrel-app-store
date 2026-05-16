@@ -365,6 +365,7 @@
         <div class="code-block" id="vps-script-code"></div>
         <div class="btn-row mt-2">
           <button class="btn btn-secondary btn-sm" onclick="copyScript(this)">Copiar script</button>
+          <button class="btn btn-secondary btn-sm" onclick="downloadScript(this)">Descargar .sh</button>
         </div>
       </div>
     </div>
@@ -621,6 +622,30 @@ async function copyScript(buttonEl) {
     }
   } catch {
     alert('No se pudo copiar automáticamente. Copia el script manualmente.');
+  }
+}
+
+function downloadScript(buttonEl) {
+  const code = document.getElementById('vps-script-code').textContent;
+  if (!code || code.trim().length < 20) {
+    alert('No hay script cargado para descargar.');
+    return;
+  }
+  const blob = new Blob([code + '\n'], { type: 'text/x-shellscript;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'miniweed-tunnel-vps-setup.sh';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  if (buttonEl) {
+    buttonEl.textContent = 'Descargado';
+    setTimeout(() => {
+      buttonEl.textContent = 'Descargar .sh';
+    }, 1500);
   }
 }
 
