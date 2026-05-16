@@ -302,13 +302,13 @@ iptables -w -A INPUT -p tcp --dport "$SSH_PORT" -j ACCEPT
 iptables -w -A INPUT -p udp --dport "$WG_PORT" -j ACCEPT
 iptables -w -A INPUT -p icmp --icmp-type echo-request -m limit --limit 10/second --limit-burst 20 -j ACCEPT
 
-iptables -w -t nat -A PREROUTING -i "$PUBLIC_IF" -p tcp --dport 80 -j DNAT --to-destination "$WG_CLIENT_IP:80"
-iptables -w -t nat -A PREROUTING -i "$PUBLIC_IF" -p tcp --dport 443 -j DNAT --to-destination "$WG_CLIENT_IP:443"
+iptables -w -t nat -A PREROUTING -p tcp --dport 80 -j DNAT --to-destination "$WG_CLIENT_IP:80"
+iptables -w -t nat -A PREROUTING -p tcp --dport 443 -j DNAT --to-destination "$WG_CLIENT_IP:443"
 iptables -w -t nat -A POSTROUTING -o "$PUBLIC_IF" -j MASQUERADE
 
-iptables -w -A FORWARD -i "$PUBLIC_IF" -o wg0 -p tcp -d "$WG_CLIENT_IP" --dport 80 -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
-iptables -w -A FORWARD -i "$PUBLIC_IF" -o wg0 -p tcp -d "$WG_CLIENT_IP" --dport 443 -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
-iptables -w -A FORWARD -i wg0 -o "$PUBLIC_IF" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -w -A FORWARD -p tcp -d "$WG_CLIENT_IP" --dport 80 -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
+iptables -w -A FORWARD -p tcp -d "$WG_CLIENT_IP" --dport 443 -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
+iptables -w -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
 iptables -w -P INPUT DROP
 iptables -w -P FORWARD DROP
@@ -367,6 +367,7 @@ echo "=============================================="
 echo " VPS Public Key: $VPS_PUB"
 echo "=============================================="
 echo " SSH PORT permitido: $SSH_PORT"
+echo " IMPORTANTE: en el panel cloud del proveedor abre TCP 80/443 y UDP $WG_PORT"
 echo " Backup firewall: $BACKUP_FILE"
 echo " Rollback script: /root/miniweed-rollback-firewall.sh"
 echo " Pega esta clave en Umbrel Tunnel y listo."
