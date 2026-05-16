@@ -166,47 +166,9 @@ function generateVpsScript(cfg) {
 # Umbrel Tunnel — VPS Setup
 # Ejecutar como root en un VPS Debian/Ubuntu
 
-set -euo pipefail
-
-if [ "$(id -u)" -ne 0 ]; then
-  echo "Este script debe ejecutarse como root"
-  exit 1
-fi
-
-export DEBIAN_FRONTEND=noninteractive
+set -e
 apt-get update -qq
-apt-get install -y -qq wireguard iptables fail2ban unattended-upgrades
-
-# Baseline de hardening de red y kernel
-cat > /etc/sysctl.d/99-miniweed-tunnel-hardening.conf <<'SYSCTLEOF'
-net.ipv4.ip_forward=1
-net.ipv4.conf.all.rp_filter=1
-net.ipv4.conf.default.rp_filter=1
-net.ipv4.conf.all.accept_redirects=0
-net.ipv4.conf.default.accept_redirects=0
-net.ipv4.conf.all.send_redirects=0
-net.ipv4.conf.default.send_redirects=0
-net.ipv4.icmp_echo_ignore_broadcasts=1
-net.ipv4.tcp_syncookies=1
-SYSCTLEOF
-sysctl --system >/dev/null
-
-# Fail2ban para SSH
-mkdir -p /etc/fail2ban/jail.d
-cat > /etc/fail2ban/jail.d/sshd.local <<'FAIL2BANEOF'
-[sshd]
-enabled = true
-backend = systemd
-maxretry = 5
-findtime = 10m
-bantime = 1h
-FAIL2BANEOF
-systemctl enable fail2ban >/dev/null 2>&1 || true
-systemctl restart fail2ban >/dev/null 2>&1 || true
-
-# Actualizaciones de seguridad automáticas
-systemctl enable unattended-upgrades >/dev/null 2>&1 || true
-systemctl restart unattended-upgrades >/dev/null 2>&1 || true
+apt-get install -y -qq wireguard iptables
 
 VPS_PRIV=$(wg genkey)
 VPS_PUB=$(echo "$VPS_PRIV" | wg pubkey)
@@ -217,25 +179,18 @@ cat > /etc/wireguard/wg0.conf <<WGEOF
 Address = ${cfg.tunnelServerIp}/24
 ListenPort = ${cfg.vpsPort}
 PrivateKey = $VPS_PRIV
-PostUp   = iptables -w -t nat -A PREROUTING -i $ETH -p tcp --dport 80  -j DNAT --to-destination ${cfg.tunnelClientIp}:80
-PostUp   = iptables -w -t nat -A PREROUTING -i $ETH -p tcp --dport 443 -j DNAT --to-destination ${cfg.tunnelClientIp}:443
-PostUp   = iptables -w -t nat -A POSTROUTING -o $ETH -j MASQUERADE
-PostUp   = iptables -w -A FORWARD -i $ETH -o wg0 -p tcp -d ${cfg.tunnelClientIp} --dport 80 -j ACCEPT
-PostUp   = iptables -w -A FORWARD -i $ETH -o wg0 -p tcp -d ${cfg.tunnelClientIp} --dport 443 -j ACCEPT
-PostUp   = iptables -w -A FORWARD -i wg0 -o $ETH -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-PreDown  = iptables -w -t nat -D PREROUTING -i $ETH -p tcp --dport 80  -j DNAT --to-destination ${cfg.tunnelClientIp}:80
-PreDown  = iptables -w -t nat -D PREROUTING -i $ETH -p tcp --dport 443 -j DNAT --to-destination ${cfg.tunnelClientIp}:443
-PreDown  = iptables -w -t nat -D POSTROUTING -o $ETH -j MASQUERADE
-PreDown  = iptables -w -D FORWARD -i $ETH -o wg0 -p tcp -d ${cfg.tunnelClientIp} --dport 80 -j ACCEPT
-PreDown  = iptables -w -D FORWARD -i $ETH -o wg0 -p tcp -d ${cfg.tunnelClientIp} --dport 443 -j ACCEPT
-PreDown  = iptables -w -D FORWARD -i wg0 -o $ETH -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+PostUp   = iptables -t nat -A PREROUTING -i $ETH -p tcp --dport 80  -j DNAT --to-destination ${cfg.tunnelClientIp}:80
+PostUp   = iptables -t nat -A PREROUTING -i $ETH -p tcp --dport 443 -j DNAT --to-destination ${cfg.tunnelClientIp}:443
+PostUp   = iptables -t nat -A POSTROUTING -j MASQUERADE
+PostUp   = sysctl -w net.ipv4.ip_forward=1
+PreDown  = iptables -t nat -D PREROUTING -i $ETH -p tcp --dport 80  -j DNAT --to-destination ${cfg.tunnelClientIp}:80
+PreDown  = iptables -t nat -D PREROUTING -i $ETH -p tcp --dport 443 -j DNAT --to-destination ${cfg.tunnelClientIp}:443
+PreDown  = iptables -t nat -D POSTROUTING -j MASQUERADE
 
 [Peer]
 PublicKey = ${cfg.publicKey}
 AllowedIPs = ${cfg.tunnelClientIp}/32
 WGEOF
-
-chmod 600 /etc/wireguard/wg0.conf
 
 systemctl enable wg-quick@wg0
 systemctl start wg-quick@wg0
