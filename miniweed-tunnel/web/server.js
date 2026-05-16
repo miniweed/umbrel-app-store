@@ -12,6 +12,7 @@ const WG_API_PORT = 8080;
 const API_AUTH_TOKEN = process.env.TUNNEL_API_TOKEN || '';
 const deployJobs = new Map();
 let configLock = Promise.resolve();
+const MAX_SERVICES = 64;
 
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const WG_CONF = path.join(DATA_DIR, 'wg0.conf');
@@ -34,6 +35,7 @@ const DEFAULT_CONFIG = {
 const DEFAULT_CADDYFILE = ':80 {\n  respond "Umbrel Tunnel — not configured yet"\n}\n';
 
 app.use(express.json({ limit: '32kb' }));
+app.disable('x-powered-by');
 
 const apiRateWindowMs = 60 * 1000;
 const apiRateMax = 120;
@@ -297,6 +299,10 @@ async function checkServicesHealth(services) {
 function validateConfig(cfg) {
   const errors = [];
 
+   if ((cfg.services || []).length > MAX_SERVICES) {
+    errors.push(`Demasiados servicios: máximo ${MAX_SERVICES}`);
+  }
+
   if (cfg.vpsPort < 1 || cfg.vpsPort > 65535) errors.push('El puerto WireGuard debe estar entre 1 y 65535');
   if (cfg.privateKey && !isWireGuardKey(cfg.privateKey)) errors.push('La clave privada de Umbrel no es válida');
   if (cfg.publicKey && !isWireGuardKey(cfg.publicKey)) errors.push('La clave pública de Umbrel no es válida');
@@ -556,10 +562,13 @@ function validateSshDeployInput(input) {
   const user = (input.sshUser || 'root').trim();
   const port = parseInt(input.sshPort, 10) || 22;
   const privateKey = input.privateKey || '';
+  const password = (input.password || '').trim();
+  const passphrase = (input.passphrase || '').trim();
 
   if (!host) return { error: 'SSH host requerido' };
   if (!user) return { error: 'SSH user requerido' };
   if (port < 1 || port > 65535) return { error: 'SSH port inválido' };
+  if (password || passphrase) return { error: 'Este deploy solo acepta clave privada SSH' };
   if (!privateKey) return { error: 'Debes proporcionar clave privada SSH' };
 
   if (privateKey && (!privateKey.includes('BEGIN') || !privateKey.includes('PRIVATE KEY'))) {
