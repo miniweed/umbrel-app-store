@@ -42,7 +42,7 @@ services:
         exec caddy run --config /data/Caddyfile --adapter caddyfile --watch
 
   wg:
-    image: ghcr.io/miniweed/umbrel-tunnel-wg:1.0.3@sha256:8683aeea35541f42a7004219ce36cebcd649d9ec3c8ad3ce126f7b2595d8332f
+    image: ghcr.io/miniweed/umbrel-tunnel-wg:1.0.4@sha256:9d7c7c3f005029cabdece1c23adbb48dd5e9d864f8548f7f791ff7876badf260
     restart: on-failure
     stop_grace_period: 30s
     cap_add:

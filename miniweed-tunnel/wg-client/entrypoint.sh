@@ -9,6 +9,23 @@ READY_FILE="$DATA_DIR/wg-ready"
 echo "[wg] Umbrel Tunnel WireGuard client starting..."
 rm -f "$READY_FILE"
 
+apply_wg_ingress_guard() {
+    # Hardening: limit what a remote WG peer can reach in this namespace.
+    # Allow only reverse-proxy ingress on 80/443 over wg0, drop the rest.
+    iptables -w -N MINIWEED_WG_GUARD 2>/dev/null || true
+    iptables -w -F MINIWEED_WG_GUARD
+
+    iptables -w -A MINIWEED_WG_GUARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    iptables -w -A MINIWEED_WG_GUARD -p tcp --dport 80 -j ACCEPT
+    iptables -w -A MINIWEED_WG_GUARD -p tcp --dport 443 -j ACCEPT
+    iptables -w -A MINIWEED_WG_GUARD -p icmp -j ACCEPT
+    iptables -w -A MINIWEED_WG_GUARD -j DROP
+
+    iptables -w -D INPUT -i wg0 -j MINIWEED_WG_GUARD 2>/dev/null || true
+    iptables -w -I INPUT 1 -i wg0 -j MINIWEED_WG_GUARD
+    echo "[wg] Applied wg0 ingress guard (allow 80/443, drop rest)"
+}
+
 # Start API server immediately so keygen works before any config exists
 python3 /wg-api.py &
 API_PID=$!
@@ -34,6 +51,7 @@ until wg-quick up wg0; do
     echo "[wg] Failed to bring up wg0, retrying in 5s..."
     sleep 5
 done
+apply_wg_ingress_guard
 echo "[wg] Tunnel up"
 date -u +"%Y-%m-%dT%H:%M:%SZ" > "$READY_FILE"
 
