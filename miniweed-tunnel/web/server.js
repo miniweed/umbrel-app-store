@@ -3,14 +3,13 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const https = require('https');
-const { Client } = require('ssh2');
+const crypto = require('crypto');
 
 const app = express();
 const DATA_DIR = process.env.DATA_DIR || '/data';
 const WG_API_HOST = process.env.WG_API_HOST || 'wg';
 const WG_API_PORT = 8080;
 const API_AUTH_TOKEN = process.env.TUNNEL_API_TOKEN || '';
-const deployJobs = new Map();
 let configLock = Promise.resolve();
 const MAX_SERVICES = 64;
 
@@ -40,10 +39,6 @@ app.disable('x-powered-by');
 const apiRateWindowMs = 60 * 1000;
 const apiRateMax = 120;
 const apiRateStore = new Map();
-const deployJobTtlMs = 60 * 60 * 1000;
-const deployJobMax = 200;
-const SSH_COMMON_FALLBACK_USERS = ['debian', 'ubuntu'];
-const SSH_MAX_USER_ATTEMPTS = 3;
 
 app.set('trust proxy', 1);
 
@@ -78,32 +73,8 @@ function cleanupApiRateStore() {
   }
 }
 
-function cleanupDeployJobs() {
-  const now = Date.now();
-  for (const [jobId, job] of deployJobs.entries()) {
-    if (!job) {
-      deployJobs.delete(jobId);
-      continue;
-    }
-    const refTs = job.finishedAt || job.startedAt || now;
-    if (now - refTs > deployJobTtlMs) deployJobs.delete(jobId);
-  }
-
-  if (deployJobs.size <= deployJobMax) return;
-  const byOldest = [...deployJobs.entries()].sort((a, b) => {
-    const aTs = a[1].finishedAt || a[1].startedAt || 0;
-    const bTs = b[1].finishedAt || b[1].startedAt || 0;
-    return aTs - bTs;
-  });
-  for (const [jobId] of byOldest.slice(0, deployJobs.size - deployJobMax)) {
-    deployJobs.delete(jobId);
-  }
-}
-
 const rateGc = setInterval(cleanupApiRateStore, 60 * 1000);
 if (typeof rateGc.unref === 'function') rateGc.unref();
-const jobsGc = setInterval(cleanupDeployJobs, 5 * 60 * 1000);
-if (typeof jobsGc.unref === 'function') jobsGc.unref();
 
 function apiRateLimit(req, res, next) {
   const now = Date.now();
@@ -577,279 +548,6 @@ echo " Pega esta clave en Umbrel Tunnel y listo."
 `;
 }
 
-function validateSshDeployInput(input) {
-  const host = (input.sshHost || '').trim();
-  const user = (input.sshUser || 'root').trim();
-  const port = parseInt(input.sshPort, 10) || 22;
-  const privateKey = input.privateKey || '';
-  const password = (input.password || '').trim();
-  const passphrase = (input.passphrase || '').trim();
-
-  if (!host) return { error: 'SSH host requerido' };
-  if (!user) return { error: 'SSH user requerido' };
-  if (port < 1 || port > 65535) return { error: 'SSH port inválido' };
-  if (password || passphrase) return { error: 'Este deploy solo acepta clave privada SSH' };
-  if (!privateKey) return { error: 'Debes proporcionar clave privada SSH' };
-
-  if (privateKey && (!privateKey.includes('BEGIN') || !privateKey.includes('PRIVATE KEY'))) {
-    return { error: 'Clave privada SSH inválida' };
-  }
-
-  return {
-    host,
-    user,
-    port,
-    privateKey
-  };
-}
-
-function extractSuggestedSshUser(text) {
-  if (!text) return '';
-  const match = String(text).match(/Please login as the user\s+["']?([a-z_][a-z0-9_-]*)["']?/i);
-  return match ? match[1] : '';
-}
-
-function isSshAuthLikeFailure(text) {
-  const value = String(text || '').toLowerCase();
-  if (!value) return false;
-  return [
-    'please login as the user',
-    'permission denied',
-    'authentication methods failed',
-    'all configured authentication methods failed',
-    'publickey',
-    'root login',
-    'login as the user',
-    'access denied',
-    'code 142'
-  ].some(snippet => value.includes(snippet));
-}
-
-function buildRetryUserCandidates(requestedUser, suggestedUser = '') {
-  const first = (requestedUser || 'root').trim() || 'root';
-  const base = [first];
-
-  const suggested = (suggestedUser || '').trim();
-  if (suggested && suggested !== first) base.push(suggested);
-
-  if (first === 'root') {
-    for (const fallbackUser of SSH_COMMON_FALLBACK_USERS) {
-      if (!base.includes(fallbackUser)) base.push(fallbackUser);
-    }
-  }
-
-  return base.slice(0, SSH_MAX_USER_ATTEMPTS);
-}
-
-function shellSingleQuote(value) {
-  return `'${String(value).replace(/'/g, `'\\''`)}'`;
-}
-
-function asPrivilegedShellCommand(command) {
-  const quoted = shellSingleQuote(command);
-  return [
-    'if [ "$(id -u)" -eq 0 ]; then',
-    `  bash -lc ${quoted};`,
-    'elif command -v sudo >/dev/null 2>&1; then',
-    `  sudo -n bash -lc ${quoted};`,
-    'elif command -v doas >/dev/null 2>&1; then',
-    `  doas -n bash -lc ${quoted};`,
-    'else',
-    '  echo "__MINIWEED_NEED_ROOT_OR_SUDO__";',
-    '  exit 97;',
-    'fi'
-  ].join(' ');
-}
-
-function normalizeDeployError(err) {
-  const combined = `${err?.message || ''}\n${err?.stdout || ''}\n${err?.stderr || ''}`;
-  if (/Cannot parse privateKey: Unsupported key format/i.test(combined)) {
-    return 'La clave SSH no es compatible. Usa una clave privada OpenSSH/PEM sin passphrase (recomendado: ed25519 o ecdsa no-sk).';
-  }
-  if (/Encrypted private (OpenSSH )?key detected, but no passphrase given/i.test(combined)) {
-    return 'La clave SSH está cifrada con passphrase y este deploy no la soporta. Usa una clave sin passphrase para el deploy automático.';
-  }
-  if (combined.includes('__MINIWEED_NEED_ROOT_OR_SUDO__')) {
-    return 'El usuario SSH no tiene privilegios de administrador. Usa root o un usuario con sudo/doas sin password.';
-  }
-  if (/Timed out while waiting for handshake/i.test(combined)) {
-    return 'Timeout de conexion SSH (handshake). Revisa IP/puerto SSH y firewall del proveedor.';
-  }
-  return `Fallo SSH: ${err?.message || 'error desconocido'}`;
-}
-
-function runRemoteCommand(ssh, command, timeoutMs = 20 * 60 * 1000) {
-  return new Promise((resolve, reject) => {
-    let stdout = '';
-    let stderr = '';
-
-    ssh.exec(command, (err, stream) => {
-      if (err) return reject(err);
-
-      const timer = setTimeout(() => {
-        stream.close();
-        reject(new Error('Timeout ejecutando comando remoto (20m)'));
-      }, timeoutMs);
-
-      stream.on('close', code => {
-        clearTimeout(timer);
-        resolve({ code, stdout, stderr });
-      });
-
-      stream.on('data', data => {
-        stdout += data.toString();
-      });
-
-      stream.stderr.on('data', data => {
-        stderr += data.toString();
-      });
-    });
-  });
-}
-
-function deployScriptOverSsh(sshConfig, script) {
-  return new Promise((resolve, reject) => {
-    const ssh = new Client();
-    ssh.on('ready', async () => {
-      try {
-        const encoded = Buffer.from(script, 'utf8').toString('base64');
-        const remotePath = '/root/miniweed-tunnel-vps-setup.sh';
-        const rawCmd = [
-          `printf '%s' '${encoded}' | base64 -d > ${remotePath}`,
-          `chmod 700 ${remotePath}`,
-          `bash -n ${remotePath}`,
-          `bash ${remotePath} > /root/miniweed-tunnel-vps-setup.last.log 2>&1 || (cat /root/miniweed-tunnel-vps-setup.last.log && exit 1)`,
-          `cat /root/miniweed-tunnel-vps-setup.last.log`
-        ].join(' && ');
-        const cmd = asPrivilegedShellCommand(rawCmd);
-
-        const result = await runRemoteCommand(ssh, cmd);
-        ssh.end();
-        if (result.code !== 0) {
-          const err = new Error(`Comando remoto terminó con código ${result.code}`);
-          err.stdout = result.stdout;
-          err.stderr = result.stderr;
-          return reject(err);
-        }
-        resolve(result);
-      } catch (err) {
-        ssh.end();
-        reject(err);
-      }
-    });
-
-    ssh.on('error', reject);
-    ssh.connect({
-      host: sshConfig.host,
-      port: sshConfig.port,
-      username: sshConfig.user,
-      privateKey: sshConfig.privateKey || undefined,
-      readyTimeout: 20000
-    });
-  });
-}
-
-async function deployWithSshUserFallback(sshConfig, script) {
-  const firstUser = (sshConfig.user || 'root').trim() || 'root';
-  let users = buildRetryUserCandidates(firstUser);
-  let lastErr;
-  let attemptedUsers = [];
-
-  for (let i = 0; i < users.length; i += 1) {
-    const username = users[i];
-    const attemptConfig = { ...sshConfig, user: username };
-    attemptedUsers = [...attemptedUsers, username];
-
-    try {
-      await deployScriptOverSsh(attemptConfig, '#!/bin/bash\nset -e\necho "SSH preflight OK"\n');
-      const result = await deployScriptOverSsh(attemptConfig, script);
-      return { result, sshConfig: attemptConfig, attemptedUsers };
-    } catch (err) {
-      lastErr = err;
-      const combined = `${err?.message || ''}\n${err?.stdout || ''}\n${err?.stderr || ''}`;
-      const suggestedUser = extractSuggestedSshUser(combined);
-      const isAuthRelated = isSshAuthLikeFailure(combined);
-
-      if (i === 0 && isAuthRelated && suggestedUser) {
-        users = buildRetryUserCandidates(firstUser, suggestedUser);
-      }
-
-      const hasMoreCandidates = i < users.length - 1;
-      if (!hasMoreCandidates) break;
-
-      if (!isAuthRelated && !suggestedUser) break;
-    }
-  }
-
-  throw lastErr || new Error('No se pudo conectar por SSH');
-}
-
-function runSshCommand(sshConfig, command, timeoutMs = 30 * 1000) {
-  return new Promise((resolve, reject) => {
-    const ssh = new Client();
-    ssh.on('ready', async () => {
-      try {
-        const result = await runRemoteCommand(ssh, command, timeoutMs);
-        ssh.end();
-        if (result.code !== 0) {
-          const err = new Error(`Comando remoto terminó con código ${result.code}`);
-          err.stdout = result.stdout;
-          err.stderr = result.stderr;
-          return reject(err);
-        }
-        resolve(result);
-      } catch (err) {
-        ssh.end();
-        reject(err);
-      }
-    });
-    ssh.on('error', reject);
-    ssh.connect({
-      host: sshConfig.host,
-      port: sshConfig.port,
-      username: sshConfig.user,
-      privateKey: sshConfig.privateKey || undefined,
-      readyTimeout: 20000
-    });
-  });
-}
-
-function extractVpsPublicKey(text) {
-  if (!text) return '';
-  const match = text.match(/VPS Public Key:\s*([A-Za-z0-9+/]{43}=)/);
-  return match ? match[1] : '';
-}
-
-async function readVpsPublicKeyOverSsh(sshConfig) {
-  const cmd = asPrivilegedShellCommand('wg show wg0 public-key');
-  const result = await runSshCommand(sshConfig, cmd, 30 * 1000);
-  const key = (result.stdout || '').trim();
-  return isWireGuardKey(key) ? key : '';
-}
-
-async function waitForHandshake(maxWaitMs = 45 * 1000) {
-  const intervalMs = 3000;
-  const started = Date.now();
-
-  while (Date.now() - started < maxWaitMs) {
-    try {
-      const status = await wgApi('/status');
-      if (status && status.connected) {
-        return {
-          ok: true,
-          handshakedPeers: status.handshakedPeers || 0,
-          lastHandshakeAgeSec: status.lastHandshakeAgeSec ?? null
-        };
-      }
-    } catch {
-      // Keep polling while wg-api initializes
-    }
-    await new Promise(resolve => setTimeout(resolve, intervalMs));
-  }
-
-  return { ok: false, handshakedPeers: 0, lastHandshakeAgeSec: null };
-}
-
 function wgApi(urlPath) {
   return new Promise((resolve, reject) => {
     const req = http.request(
@@ -940,141 +638,19 @@ app.get('/api/status', async (req, res) => {
   }
 });
 
-app.get('/api/vps-setup', (req, res) => {
+app.get('/api/vps-setup-script', (req, res) => {
   const cfg = loadConfig();
   if (!cfg.publicKey || !cfg.vpsIp) {
     return res.status(400).json({ error: 'Configura la IP del VPS y genera las claves primero' });
   }
-  res.json({ script: generateVpsScript(cfg) });
-});
-
-app.post('/api/deploy-vps', async (req, res) => {
-  const cfg = loadConfig();
-  if (!cfg.publicKey || !cfg.vpsIp) {
-    return res.status(400).json({ error: 'Configura la IP del VPS y genera las claves primero' });
-  }
-
-  const parsed = validateSshDeployInput(req.body || {});
-  if (parsed.error) {
-    return res.status(400).json({ error: parsed.error });
-  }
-
   const script = generateVpsScript(cfg);
-  const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
-  deployJobs.set(jobId, {
-    status: 'running',
-    startedAt: Date.now(),
-    error: '',
-    stdout: '',
-    stderr: '',
-    vpsPubKey: '',
-    autoConfigured: false
-  });
-
-  (async () => {
-    try {
-      const deployRun = await deployWithSshUserFallback(parsed, script);
-      const result = deployRun.result;
-      const usedSshConfig = deployRun.sshConfig;
-      const attemptedSshUsers = deployRun.attemptedUsers || [parsed.user];
-
-      const combinedOutput = `${result.stdout || ''}\n${result.stderr || ''}`;
-      const printedVpsPubKey = extractVpsPublicKey(combinedOutput);
-      const readbackVpsPubKey = await readVpsPublicKeyOverSsh(usedSshConfig).catch(() => '');
-      const vpsPubKey = readbackVpsPubKey || printedVpsPubKey;
-      let autoConfigured = false;
-      let keySyncStatus = 'missing';
-      let keySyncMessage = 'No se pudo detectar la clave publica del VPS';
-      let handshake = { ok: false, handshakedPeers: 0, lastHandshakeAgeSec: null };
-
-      if (vpsPubKey) {
-        const freshCfg = await withConfigLock(async () => {
-          const nextCfg = loadConfig();
-          nextCfg.vpsPubKey = vpsPubKey;
-          saveConfig(nextCfg);
-
-          const wgConf = generateWgConf(nextCfg);
-          if (wgConf) {
-            fs.writeFileSync(WG_CONF, wgConf);
-            autoConfigured = true;
-          }
-          fs.writeFileSync(CADDYFILE, generateCaddyfile(nextCfg));
-          return nextCfg;
-        });
-
-        if (printedVpsPubKey && readbackVpsPubKey && printedVpsPubKey !== readbackVpsPubKey) {
-          keySyncStatus = 'readback-corrected';
-          keySyncMessage = 'La clave impresa no coincidia con WG; se uso la clave leida directamente del VPS.';
-        } else {
-          keySyncStatus = 'synced';
-          keySyncMessage = 'Clave publica del VPS sincronizada.';
-        }
-
-        handshake = await waitForHandshake();
-
-        if (!handshake.ok && readbackVpsPubKey) {
-          const retryReadback = await readVpsPublicKeyOverSsh(usedSshConfig).catch(() => '');
-          if (retryReadback && retryReadback !== freshCfg.vpsPubKey) {
-            await withConfigLock(async () => {
-              const retryCfg = loadConfig();
-              retryCfg.vpsPubKey = retryReadback;
-              saveConfig(retryCfg);
-              const retryWgConf = generateWgConf(retryCfg);
-              if (retryWgConf) fs.writeFileSync(WG_CONF, retryWgConf);
-            });
-            keySyncStatus = 'retry-updated';
-            keySyncMessage = 'Se detecto cambio de clave en VPS y se aplico una resincronizacion automatica.';
-            handshake = await waitForHandshake();
-          }
-        }
-
-        if (!handshake.ok && keySyncStatus === 'synced') {
-          keySyncStatus = 'synced-no-handshake-yet';
-          keySyncMessage = 'Clave sincronizada, pero aun sin handshake. Verifica unos segundos y revisa firewall del proveedor.';
-        }
-      }
-
-      deployJobs.set(jobId, {
-        status: 'success',
-        startedAt: deployJobs.get(jobId)?.startedAt || Date.now(),
-        finishedAt: Date.now(),
-        error: '',
-        stdout: result.stdout || '',
-        stderr: result.stderr || '',
-        vpsPubKey,
-        vpsPubKeyFingerprint: keyFingerprint(vpsPubKey),
-        sshUserUsed: usedSshConfig.user,
-        sshUserFallbackUsed: usedSshConfig.user !== parsed.user,
-        sshUsersTried: attemptedSshUsers,
-        autoConfigured,
-        keySyncStatus,
-        keySyncMessage,
-        handshakeOk: handshake.ok,
-        handshakedPeers: handshake.handshakedPeers,
-        lastHandshakeAgeSec: handshake.lastHandshakeAgeSec
-      });
-    } catch (err) {
-      deployJobs.set(jobId, {
-        status: 'error',
-        startedAt: deployJobs.get(jobId)?.startedAt || Date.now(),
-        finishedAt: Date.now(),
-        error: normalizeDeployError(err),
-        stdout: err.stdout || '',
-        stderr: err.stderr || ''
-      });
-    }
-  })();
-
-  return res.status(202).json({ ok: true, jobId });
-});
-
-app.get('/api/deploy-vps/:jobId', (req, res) => {
-  const job = deployJobs.get(req.params.jobId);
-  if (!job) {
-    return res.status(404).json({ error: 'Job no encontrado' });
+  const sha256 = crypto.createHash('sha256').update(script).digest('hex');
+  if (req.query.format === 'plain') {
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="miniweed-tunnel-vps-setup.sh"');
+    return res.send(script);
   }
-  return res.json(job);
+  return res.json({ script, sha256, filename: 'miniweed-tunnel-vps-setup.sh' });
 });
 
 // ── boot ─────────────────────────────────────────────────────────────────────

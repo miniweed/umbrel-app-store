@@ -393,40 +393,12 @@
       </div>
       <div id="vps-script-block" class="hidden">
         <div class="code-block" id="vps-script-code"></div>
+        <p class="text-sm mt-2">SHA-256 del script: <code id="vps-script-sha">-</code></p>
         <div class="btn-row mt-2">
           <button class="btn btn-secondary btn-sm" onclick="copyScript(this)">Copiar script</button>
           <button class="btn btn-secondary btn-sm" onclick="downloadScript(this)">Descargar .sh</button>
-          <button class="btn btn-primary btn-sm" onclick="openDeployModal()">Deploy directo por SSH</button>
         </div>
       </div>
-    </div>
-
-    <div id="deploy-modal" class="card hidden">
-      <div class="card-title">Deploy directo al VPS (experimental)</div>
-      <div class="field">
-        <label>Host/IP SSH</label>
-        <input type="text" id="sshHost" placeholder="80.71.235.230">
-      </div>
-      <div class="row">
-        <div class="field">
-          <label>Usuario SSH</label>
-          <input type="text" id="sshUser" value="root">
-        </div>
-        <div class="field">
-          <label>Puerto SSH</label>
-          <input type="number" id="sshPort" value="22" min="1" max="65535">
-        </div>
-      </div>
-      <div class="field">
-        <label>Clave privada SSH (PEM/OpenSSH)</label>
-        <textarea id="sshPrivateKey" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" style="width:100%;min-height:140px;background:#0d0d0d;border:1px solid #333;border-radius:8px;padding:10px;color:#e5e5e5;font-family:monospace;font-size:12px"></textarea>
-      </div>
-      <div class="btn-row">
-        <button class="btn btn-primary" onclick="deployToVps(this)">Ejecutar deploy</button>
-        <button class="btn btn-secondary" onclick="closeDeployModal()">Cancelar</button>
-      </div>
-      <p id="deploy-msg" class="text-sm mt-2"></p>
-      <div id="deploy-log" class="status-raw hidden" style="margin-top:12px"></div>
     </div>
 
     <div class="card">
@@ -444,7 +416,7 @@
         <div class="step-sep">→</div>
         <div class="step" id="step-3">
           <div class="step-num">3</div>
-          <span>Ejecutar script o deploy SSH</span>
+          <span>Ejecutar script en el VPS</span>
         </div>
         <div class="step-sep">→</div>
         <div class="step" id="step-4">
@@ -452,7 +424,7 @@
           <span>Guardar configuración y listo</span>
         </div>
       </div>
-      <p class="text-sm">La clave pública del VPS se rellena automáticamente cuando usas deploy SSH.</p>
+      <p class="text-sm">Pega manualmente la clave pública del VPS tras ejecutar el script.</p>
     </div>
 
   </div>
@@ -652,16 +624,19 @@ function updateServicesStatus() {
 async function loadVpsScript() {
   const block = document.getElementById('vps-script-block');
   const placeholder = document.getElementById('vps-script-placeholder');
+  const shaEl = document.getElementById('vps-script-sha');
   try {
-    const res = await apiFetch('/api/vps-setup');
+    const res = await apiFetch('/api/vps-setup-script');
     if (!res.ok) { block.classList.add('hidden'); placeholder.classList.remove('hidden'); return; }
     const data = await res.json();
     document.getElementById('vps-script-code').textContent = data.script;
+    if (shaEl) shaEl.textContent = data.sha256 || '-';
     block.classList.remove('hidden');
     placeholder.classList.add('hidden');
   } catch {
     block.classList.add('hidden');
     placeholder.classList.remove('hidden');
+    if (shaEl) shaEl.textContent = '-';
   }
 }
 
@@ -715,135 +690,6 @@ function downloadScript(buttonEl) {
     setTimeout(() => {
       buttonEl.textContent = 'Descargar .sh';
     }, 1500);
-  }
-}
-
-function openDeployModal() {
-  document.getElementById('sshHost').value = cfg.vpsIp || '';
-  document.getElementById('deploy-msg').textContent = '';
-  document.getElementById('deploy-log').classList.add('hidden');
-  document.getElementById('deploy-modal').classList.remove('hidden');
-}
-
-function closeDeployModal() {
-  const keyEl = document.getElementById('sshPrivateKey');
-  if (keyEl) keyEl.value = '';
-  document.getElementById('deploy-modal').classList.add('hidden');
-}
-
-async function deployToVps(buttonEl) {
-  const msg = document.getElementById('deploy-msg');
-  const log = document.getElementById('deploy-log');
-  const payload = {
-    sshHost: document.getElementById('sshHost').value.trim(),
-    sshUser: document.getElementById('sshUser').value.trim(),
-    sshPort: parseInt(document.getElementById('sshPort').value, 10) || 22,
-    privateKey: document.getElementById('sshPrivateKey').value
-  };
-
-  if (!payload.sshHost || !payload.privateKey) {
-    msg.style.color = '#f87171';
-    msg.textContent = 'Host y clave privada SSH son obligatorios.';
-    return;
-  }
-
-  buttonEl.disabled = true;
-  msg.style.color = '#9ca3af';
-  msg.textContent = 'Desplegando script al VPS... (puede tardar varios minutos)';
-  log.classList.add('hidden');
-  log.textContent = '';
-
-  let timeoutId;
-  try {
-    const controller = new AbortController();
-    timeoutId = setTimeout(() => controller.abort(), 25 * 60 * 1000);
-    const res = await fetch('/api/deploy-vps', {
-      method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(payload),
-      signal: controller.signal
-    });
-    const data = await res.json();
-
-    if (!res.ok) {
-      msg.style.color = '#f87171';
-      msg.textContent = data.error || 'Falló el deploy remoto';
-      const details = [data.stdout, data.stderr].filter(Boolean).join('\n');
-      if (details) {
-        log.textContent = details;
-        log.classList.remove('hidden');
-      }
-      return;
-    }
-
-    const jobId = data.jobId;
-    if (!jobId) {
-      msg.style.color = '#f87171';
-      msg.textContent = 'No se recibió jobId del deploy remoto.';
-      return;
-    }
-
-    msg.style.color = '#9ca3af';
-    msg.textContent = 'Deploy en progreso en el VPS...';
-
-    while (true) {
-      await new Promise(r => setTimeout(r, 2000));
-      const statusRes = await apiFetch(`/api/deploy-vps/${jobId}`);
-      const status = await statusRes.json();
-
-      const details = [status.stdout, status.stderr].filter(Boolean).join('\n');
-      if (details) {
-        log.textContent = details;
-        log.classList.remove('hidden');
-      }
-
-      if (status.status === 'running') {
-        continue;
-      }
-
-      if (status.status === 'error') {
-        msg.style.color = '#f87171';
-        msg.textContent = status.error || 'Error ejecutando script en VPS';
-        return;
-      }
-
-      if (status.status === 'success') {
-        msg.style.color = '#4ade80';
-        const fingerprint = status.vpsPubKeyFingerprint ? ` (${status.vpsPubKeyFingerprint})` : '';
-        const keySyncNote = status.keySyncMessage ? ` ${status.keySyncMessage}` : '';
-        const sshUserNote = status.sshUserUsed
-          ? (status.sshUserFallbackUsed
-              ? ` Se uso usuario SSH alternativo: ${status.sshUserUsed}.`
-              : ` Usuario SSH: ${status.sshUserUsed}.`)
-          : '';
-        const handshakeNote = status.handshakeOk
-          ? ' Handshake WireGuard detectado.'
-          : ' Aun sin handshake inmediato; puede tardar unos segundos.';
-        if (status.autoConfigured) {
-          msg.textContent = `Deploy ejecutado y clave VPS configurada automaticamente${fingerprint}.${keySyncNote}${sshUserNote}${handshakeNote}`;
-          await loadConfig();
-          updateSteps();
-        } else {
-          msg.textContent = `Deploy ejecutado correctamente.${keySyncNote}${sshUserNote}`;
-        }
-        return;
-      }
-
-      msg.style.color = '#f87171';
-      msg.textContent = 'Estado de deploy desconocido.';
-      return;
-    }
-  } catch (e) {
-    msg.style.color = '#f87171';
-    msg.textContent = e && e.name === 'AbortError'
-      ? 'Timeout de red en la UI (25m). Revisa logs y reintenta.'
-      : 'Error de red o timeout al hacer deploy.';
-  } finally {
-    const keyEl = document.getElementById('sshPrivateKey');
-    if (keyEl) keyEl.value = '';
-    payload.privateKey = '';
-    if (timeoutId) clearTimeout(timeoutId);
-    buttonEl.disabled = false;
   }
 }
 
