@@ -6,6 +6,7 @@ const https = require('https');
 const zlib = require('zlib');
 const crypto = require('crypto');
 const dns = require('dns');
+const { ConfigSchema } = require('./api-spec/schemas');
 const { seal, open, isSealed } = require('./lib/cryptobox');
 const audit = require('./lib/audit');
 
@@ -29,6 +30,8 @@ const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const loginFailures = new Map();
 const authChallenges = new Map();
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
+const rotationPlans = new Map();
+const ROTATION_PLAN_TTL_MS = 30 * 60 * 1000;
 
 const DEFAULT_CONFIG = {
   privateKey: '',
@@ -75,7 +78,9 @@ const rateBuckets = {
   '/api/keygen': { max: 5, windowMs: 3_600_000 },
   '/api/vps-setup-script': { max: 10, windowMs: 600_000 },
   '/api/config': { max: 30, windowMs: 60_000 },
-  '/api/auth/login': { max: 5, windowMs: 60_000 }
+  '/api/auth/login': { max: 5, windowMs: 60_000 },
+  '/api/rotate/prepare': { max: 3, windowMs: 300_000 },
+  '/api/rotate/confirm': { max: 5, windowMs: 300_000 }
 };
 const apiRateStore = new Map();
 
@@ -202,6 +207,13 @@ function cleanupAuthChallenges() {
   }
 }
 
+function cleanupRotationPlans() {
+  const now = Date.now();
+  for (const [id, plan] of rotationPlans.entries()) {
+    if (!plan || plan.expiresAt <= now) rotationPlans.delete(id);
+  }
+}
+
 function createSession(ip, source = 'web') {
   const now = Date.now();
   return {
@@ -227,6 +239,8 @@ const rateGc = setInterval(cleanupApiRateStore, 60 * 1000);
 if (typeof rateGc.unref === 'function') rateGc.unref();
 const challengeGc = setInterval(cleanupAuthChallenges, 60 * 1000);
 if (typeof challengeGc.unref === 'function') challengeGc.unref();
+const rotationGc = setInterval(cleanupRotationPlans, 60 * 1000);
+if (typeof rotationGc.unref === 'function') rotationGc.unref();
 
 function apiRateLimit(req, res, next) {
   const bucketName = rateBuckets[req.path] ? req.path : 'default';
@@ -479,6 +493,17 @@ function normalizeTargetUrl(value) {
   } catch {
     return '';
   }
+}
+
+function validateBody(schema) {
+  return (req, res, next) => {
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'validation', issues: parsed.error.issues });
+    }
+    req.body = parsed.data;
+    return next();
+  };
 }
 
 function serviceKey(svc) {
@@ -835,6 +860,69 @@ echo " Pega esta clave en Umbrel Tunnel y listo."
 `;
 }
 
+function buildVpsRotateScript(cfg, next) {
+  const pskLine = next.presharedKey ? `PresharedKey = ${next.presharedKey}` : '';
+  return `#!/usr/bin/env bash
+set -euo pipefail
+
+BACKUP="/etc/wireguard/wg0.conf.rotate-$(date +%s).bak"
+NEW_CONF_FILE="/tmp/wg0.rotate.new.conf"
+
+rollback() {
+  echo "ROTATE_FAIL: restoring $BACKUP"
+  cp "$BACKUP" /etc/wireguard/wg0.conf
+  wg-quick down wg0 2>/dev/null || true
+  wg-quick up wg0
+  exit 1
+}
+
+trap rollback ERR
+
+cp /etc/wireguard/wg0.conf "$BACKUP"
+
+cat > "$NEW_CONF_FILE" <<'WGEOF'
+[Interface]
+Address = ${cfg.tunnelServerIp}/24
+ListenPort = ${cfg.vpsPort}
+PrivateKey = __KEEP_EXISTING_VPS_PRIVATE_KEY__
+
+[Peer]
+PublicKey = ${next.publicKey}
+${pskLine}
+AllowedIPs = ${cfg.tunnelClientIp}/32
+WGEOF
+
+if grep -q '^PrivateKey' /etc/wireguard/wg0.conf; then
+  VPS_PRIV=$(awk -F' = ' '/^PrivateKey/ {print $2; exit}' /etc/wireguard/wg0.conf)
+else
+  echo "No se pudo leer PrivateKey actual de /etc/wireguard/wg0.conf"
+  exit 1
+fi
+
+sed -i "s|__KEEP_EXISTING_VPS_PRIVATE_KEY__|$VPS_PRIV|g" "$NEW_CONF_FILE"
+cp "$NEW_CONF_FILE" /etc/wireguard/wg0.conf
+chmod 600 /etc/wireguard/wg0.conf
+
+wg-quick down wg0 || true
+wg-quick up wg0
+
+for i in $(seq 1 30); do
+  HS=$(wg show wg0 latest-handshakes | awk '{print $2}' | head -n1)
+  if [ -n "$HS" ] && [ "$HS" -gt 0 ] 2>/dev/null; then
+    NOW=$(date +%s)
+    AGE=$((NOW - HS))
+    if [ "$AGE" -lt 90 ]; then
+      echo "ROTATE_OK"
+      exit 0
+    fi
+  fi
+  sleep 1
+done
+
+rollback
+`;
+}
+
 async function computeHealth(cfg) {
   const services = cfg?.services || [];
   const out = {};
@@ -969,7 +1057,7 @@ app.get('/api/config', (req, res) => {
   });
 });
 
-app.post('/api/config', async (req, res) => {
+app.post('/api/config', validateBody(ConfigSchema.partial().passthrough()), async (req, res) => {
   try {
     const result = await withConfigLock(async () => {
       const existing = loadConfig();
@@ -1336,6 +1424,136 @@ app.get('/api/audit', (req, res) => {
   const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 1000) : 100;
   const entries = audit.readLatest(limit);
   res.json({ entries, total: entries.length });
+});
+
+app.get('/api/openapi.json', (req, res) => {
+  res.json({
+    openapi: '3.1.0',
+    info: {
+      title: 'Tunnel API',
+      version: '1.4.0'
+    },
+    paths: {
+      '/api/config': {
+        post: { summary: 'Update configuration' },
+        get: { summary: 'Get configuration' }
+      },
+      '/api/auth/login': {
+        post: { summary: 'Password login' }
+      },
+      '/api/auth/challenge': {
+        post: { summary: 'Get challenge for pubkey auth' }
+      },
+      '/api/auth/verify': {
+        post: { summary: 'Verify challenge signature and issue session' }
+      }
+    }
+  });
+});
+
+app.post('/api/rotate/prepare', async (req, res) => {
+  const cfg = loadConfig();
+  if (!cfg.vpsIp || !cfg.publicKey || !cfg.privateKey) {
+    return res.status(400).json({ error: 'Configuración incompleta para rotación' });
+  }
+  try {
+    const body = req.body || {};
+    let keys = null;
+    if (body.nextPrivateKey && body.nextPublicKey) {
+      if (!isWireGuardKey(body.nextPrivateKey) || !isWireGuardKey(body.nextPublicKey)) {
+        return res.status(400).json({ error: 'nextPrivateKey/nextPublicKey inválidas' });
+      }
+      if (body.nextPresharedKey && !isWireGuardKey(body.nextPresharedKey)) {
+        return res.status(400).json({ error: 'nextPresharedKey inválida' });
+      }
+      keys = {
+        privateKey: body.nextPrivateKey,
+        publicKey: body.nextPublicKey,
+        presharedKey: body.nextPresharedKey || cfg.presharedKey || ''
+      };
+    } else {
+      keys = await wgApi('/keygen');
+    }
+    const planId = crypto.randomBytes(16).toString('hex');
+    const now = Date.now();
+    const next = {
+      privateKey: keys.privateKey,
+      publicKey: keys.publicKey,
+      presharedKey: keys.presharedKey || cfg.presharedKey || ''
+    };
+    const script = buildVpsRotateScript(cfg, next);
+    rotationPlans.set(planId, {
+      id: planId,
+      createdAt: now,
+      expiresAt: now + ROTATION_PLAN_TTL_MS,
+      previous: {
+        privateKey: cfg.privateKey,
+        publicKey: cfg.publicKey,
+        presharedKey: cfg.presharedKey || ''
+      },
+      next,
+      script,
+      scriptSha256: crypto.createHash('sha256').update(script).digest('hex')
+    });
+    audit.log({ action: 'key.rotate.prepare', ip: req.ip, planId, nextFingerprint: keyFingerprint(next.publicKey) });
+    return res.json({
+      ok: true,
+      planId,
+      expiresInSec: Math.floor(ROTATION_PLAN_TTL_MS / 1000),
+      nextPublicKey: next.publicKey,
+      nextPublicKeyFingerprint: keyFingerprint(next.publicKey),
+      script,
+      scriptSha256: crypto.createHash('sha256').update(script).digest('hex')
+    });
+  } catch (err) {
+    return res.status(503).json({ error: `No se pudo preparar rotación: ${err.message}` });
+  }
+});
+
+app.post('/api/rotate/confirm', async (req, res) => {
+  const planId = String(req.body?.planId || '').trim();
+  const apply = req.body?.apply !== false;
+  const plan = rotationPlans.get(planId);
+  if (!plan || plan.expiresAt <= Date.now()) {
+    rotationPlans.delete(planId);
+    return res.status(404).json({ error: 'Plan de rotación no encontrado o expirado' });
+  }
+
+  if (!apply) {
+    rotationPlans.delete(planId);
+    audit.log({ action: 'key.rotate.cancel', ip: req.ip, planId });
+    return res.json({ ok: true, cancelled: true });
+  }
+
+  await withConfigLock(async () => {
+    const cfg = loadConfig();
+    cfg.privateKey = plan.next.privateKey;
+    cfg.publicKey = plan.next.publicKey;
+    cfg.presharedKey = plan.next.presharedKey;
+    saveConfig(cfg);
+    const wgConf = generateWgConf(cfg);
+    if (wgConf) fs.writeFileSync(WG_CONF, wgConf);
+  });
+
+  rotationPlans.delete(planId);
+  audit.log({ action: 'key.rotate.commit', ip: req.ip, planId, publicKeyFingerprint: keyFingerprint(plan.next.publicKey) });
+  return res.json({ ok: true, applied: true, nextPublicKey: plan.next.publicKey, nextPublicKeyFingerprint: keyFingerprint(plan.next.publicKey) });
+});
+
+app.get('/api/rotate/:planId', (req, res) => {
+  const plan = rotationPlans.get(req.params.planId);
+  if (!plan || plan.expiresAt <= Date.now()) {
+    if (plan) rotationPlans.delete(req.params.planId);
+    return res.status(404).json({ error: 'Plan no encontrado o expirado' });
+  }
+  return res.json({
+    id: plan.id,
+    createdAt: plan.createdAt,
+    expiresAt: plan.expiresAt,
+    nextPublicKey: plan.next.publicKey,
+    nextPublicKeyFingerprint: keyFingerprint(plan.next.publicKey),
+    scriptSha256: plan.scriptSha256
+  });
 });
 
 // ── boot ─────────────────────────────────────────────────────────────────────

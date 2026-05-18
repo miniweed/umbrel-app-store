@@ -223,4 +223,44 @@ describe('api hardening', () => {
     const body = JSON.parse(add.body);
     expect(body.keyId).toBeTruthy();
   });
+
+  test('rotation prepare and commit flow works', async () => {
+    const seedPayload = JSON.stringify({
+      vpsIp: '1.2.3.4',
+      vpsPort: 51820,
+      vpsPubKey: 'A'.repeat(43) + '=',
+      domain: 'example.com',
+      acmeEmail: 'ops@example.com',
+      privateKey: 'A'.repeat(43) + '=',
+      publicKey: 'B'.repeat(43) + '=',
+      services: []
+    });
+    const saved = await req(port, 'POST', '/api/config', seedPayload, {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(saved.status).toBe(200);
+
+    const prep = await req(port, 'POST', '/api/rotate/prepare', JSON.stringify({
+      nextPrivateKey: 'C'.repeat(43) + '=',
+      nextPublicKey: 'D'.repeat(43) + '=',
+      nextPresharedKey: 'E'.repeat(43) + '='
+    }), {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(prep.status).toBe(200);
+    const prepBody = JSON.parse(prep.body);
+    expect(prepBody.planId).toBeTruthy();
+    expect(prepBody.scriptSha256).toMatch(/^[a-f0-9]{64}$/);
+
+    const confirm = await req(port, 'POST', '/api/rotate/confirm', JSON.stringify({ planId: prepBody.planId, apply: true }), {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(confirm.status).toBe(200);
+    const confirmBody = JSON.parse(confirm.body);
+    expect(confirmBody.applied).toBe(true);
+    expect(confirmBody.nextPublicKey).toBeTruthy();
+  });
 });
