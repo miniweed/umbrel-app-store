@@ -245,6 +245,7 @@
   .alert-info { background: #1e1b4b; color: #a5b4fc; border: 1px solid #3730a3; }
   .alert-success { background: #14532d; color: #86efac; border: 1px solid #166534; }
   .alert-warn { background: #451a03; color: #fdba74; border: 1px solid #92400e; }
+  .alert-error { background: #2d1515; color: #fca5a5; border: 1px solid #7f1d1d; }
 
   .hidden { display: none !important; }
   .text-sm { font-size: 13px; color: #6b7280; }
@@ -349,6 +350,19 @@
       <div class="field">
         <label>Email para Let's Encrypt</label>
         <input type="email" id="acmeEmail" placeholder="tu@email.com">
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Autenticación web</div>
+      <p class="text-sm" style="margin-bottom:10px">Opcional: configura una contraseña de acceso a la UI además del token API.</p>
+      <div class="field">
+        <label>Nueva contraseña (mínimo 12 caracteres)</label>
+        <input type="text" id="uiPassword" placeholder="Introduce contraseña fuerte">
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-secondary" onclick="setUiPassword()">Guardar contraseña UI</button>
+        <span id="auth-msg" class="text-sm" style="align-self:center"></span>
       </div>
     </div>
 
@@ -470,6 +484,11 @@ function showTab(name) {
 // ── Load config from server ───────────────────────────────────────────────────
 async function loadConfig() {
   const res = await apiFetch('/api/config');
+  if (res.status === 401) {
+    document.getElementById('status-text').textContent = 'Login requerido';
+    showLoginPrompt();
+    return;
+  }
   cfg = await res.json();
 
   document.getElementById('publicKey').value = cfg.publicKey || '';
@@ -489,6 +508,45 @@ async function loadConfig() {
   if (!cfg.publicKey || !cfg.vpsPubKey || !cfg.vpsIp) {
     document.getElementById('setup-wizard').classList.remove('hidden');
   }
+}
+
+async function setUiPassword() {
+  const msg = document.getElementById('auth-msg');
+  const password = document.getElementById('uiPassword').value;
+  if (!password || password.length < 12) {
+    msg.style.color = '#f87171';
+    msg.textContent = 'Usa al menos 12 caracteres.';
+    return;
+  }
+  const res = await apiFetch('/api/auth/password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password })
+  });
+  if (res.ok) {
+    msg.style.color = '#4ade80';
+    msg.textContent = 'Contraseña UI guardada.';
+    document.getElementById('uiPassword').value = '';
+  } else {
+    const body = await res.json().catch(() => ({}));
+    msg.style.color = '#f87171';
+    msg.textContent = body.error || 'Error al guardar contraseña.';
+  }
+}
+
+async function showLoginPrompt() {
+  const password = prompt('Introduce la contraseña de la UI');
+  if (!password) return;
+  const res = await apiFetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password })
+  });
+  if (!res.ok) {
+    alert('Login inválido.');
+    return;
+  }
+  await loadConfig();
 }
 
 // ── Save config ───────────────────────────────────────────────────────────────

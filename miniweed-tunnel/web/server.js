@@ -24,6 +24,9 @@ const TOKEN_FILE = path.join(DATA_DIR, 'api-token.enc');
 const HEALTH_FILE = path.join(DATA_DIR, 'health.json');
 const KNOWN_HOSTS_FILE = path.join(DATA_DIR, 'known_hosts.json');
 const ENCRYPTED_FIELDS = ['privateKey', 'presharedKey'];
+const SESSION_COOKIE = 'mw_session';
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const loginFailures = new Map();
 
 const DEFAULT_CONFIG = {
   privateKey: '',
@@ -37,7 +40,11 @@ const DEFAULT_CONFIG = {
   domain: '',
   acmeEmail: '',
   services: [],
-  serviceHealth: {}
+  serviceHealth: {},
+  auth: {
+    passwordHash: '',
+    sessions: []
+  }
 };
 
 const DEFAULT_CADDYFILE = ':80 {\n  respond "Umbrel Tunnel — not configured yet"\n}\n';
@@ -64,7 +71,8 @@ const rateBuckets = {
   default: { max: 120, windowMs: 60_000 },
   '/api/keygen': { max: 5, windowMs: 3_600_000 },
   '/api/vps-setup-script': { max: 10, windowMs: 600_000 },
-  '/api/config': { max: 30, windowMs: 60_000 }
+  '/api/config': { max: 30, windowMs: 60_000 },
+  '/api/auth/login': { max: 5, windowMs: 60_000 }
 };
 const apiRateStore = new Map();
 
@@ -92,6 +100,43 @@ function withConfigLock(fn) {
   const run = configLock.then(() => fn());
   configLock = run.catch(() => {});
   return run;
+}
+
+function hashPassword(password) {
+  const N = 1 << 15;
+  const r = 8;
+  const p = 1;
+  const salt = crypto.randomBytes(16);
+  const key = crypto.scryptSync(password, salt, 32, { N, r, p, maxmem: 128 * 1024 * 1024 });
+  return `scrypt$${N}$${r}$${p}$${salt.toString('base64')}$${key.toString('base64')}`;
+}
+
+function verifyPassword(password, encoded) {
+  if (!encoded || typeof encoded !== 'string') return false;
+  const parts = encoded.split('$');
+  if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
+  const N = parseInt(parts[1], 10);
+  const r = parseInt(parts[2], 10);
+  const p = parseInt(parts[3], 10);
+  const salt = Buffer.from(parts[4], 'base64');
+  const expected = Buffer.from(parts[5], 'base64');
+  const actual = crypto.scryptSync(password, salt, expected.length, { N, r, p, maxmem: 128 * 1024 * 1024 });
+  return crypto.timingSafeEqual(actual, expected);
+}
+
+function authFailureDelayMs(ip) {
+  const now = Date.now();
+  const entry = loginFailures.get(ip) || { fails: 0, blockUntil: 0 };
+  if (entry.blockUntil > now) return entry.blockUntil - now;
+  const nextFails = entry.fails + 1;
+  const delay = Math.min(16_000, 1000 * (2 ** (nextFails - 1)));
+  const blockUntil = nextFails >= 6 ? now + 60 * 60 * 1000 : 0;
+  loginFailures.set(ip, { fails: nextFails, blockUntil });
+  return delay;
+}
+
+function clearAuthFailures(ip) {
+  loginFailures.delete(ip);
 }
 
 function cleanupApiRateStore() {
@@ -132,12 +177,18 @@ function apiRateLimit(req, res, next) {
 }
 
 function requireApiAuth(req, res, next) {
+  if (req.path === '/auth/login' || req.path === '/api/auth/login') return next();
   const headerToken = req.get('x-tunnel-api-token') || '';
   const cookieToken = parseCookies(req).tunnel_api_token || '';
+  const sessionToken = parseCookies(req)[SESSION_COOKIE] || '';
   const expected = Buffer.from(String(API_AUTH_TOKEN).padEnd(128).slice(0, 128));
   const headerOk = crypto.timingSafeEqual(Buffer.from(String(headerToken).padEnd(128).slice(0, 128)), expected);
   const cookieOk = crypto.timingSafeEqual(Buffer.from(String(cookieToken).padEnd(128).slice(0, 128)), expected);
-  if (!headerOk && !cookieOk) {
+  const cfg = loadConfig();
+  const now = Date.now();
+  const sessions = Array.isArray(cfg.auth?.sessions) ? cfg.auth.sessions : [];
+  const sessionOk = Boolean(sessionToken && sessions.some(s => s.id === sessionToken && s.expiresAt > now));
+  if (!headerOk && !cookieOk && !sessionOk) {
     audit.log({ action: 'auth.fail', ip: req.ip, path: req.path });
     return res.status(401).json({ error: 'No autorizado' });
   }
@@ -823,8 +874,13 @@ function wgApi(urlPath) {
 app.get('/api/config', (req, res) => {
   const cfg = loadConfig();
   // Never expose private key to the frontend
+  const auth = cfg.auth || { passwordHash: '', sessions: [] };
   res.json({
     ...cfg,
+    auth: {
+      passwordEnabled: Boolean(auth.passwordHash),
+      sessionCount: Array.isArray(auth.sessions) ? auth.sessions.length : 0
+    },
     privateKey: cfg.privateKey ? '••••' : '',
     vpsPubKeyFingerprint: keyFingerprint(cfg.vpsPubKey)
   });
@@ -879,6 +935,58 @@ app.post('/api/config', async (req, res) => {
   }
 });
 
+app.post('/api/auth/password', async (req, res) => {
+  const password = String(req.body?.password || '');
+  if (password.length < 12 || password.length > 256) {
+    return res.status(400).json({ error: 'password inválida' });
+  }
+  await withConfigLock(async () => {
+    const cfg = loadConfig();
+    cfg.auth = cfg.auth || {};
+    cfg.auth.passwordHash = hashPassword(password);
+    cfg.auth.sessions = [];
+    saveConfig(cfg);
+  });
+  audit.log({ action: 'auth.password.set', ip: req.ip });
+  return res.json({ ok: true });
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  const password = String(req.body?.password || '');
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  if (!password) return res.status(400).json({ error: 'password requerida' });
+
+  const cfg = loadConfig();
+  const hash = cfg.auth?.passwordHash || '';
+  if (!hash) return res.status(400).json({ error: 'password no configurada' });
+
+  const ok = verifyPassword(password, hash);
+  if (!ok) {
+    const delay = authFailureDelayMs(ip);
+    await new Promise(resolve => setTimeout(resolve, delay));
+    audit.log({ action: 'auth.fail', ip, path: '/api/auth/login' });
+    return res.status(401).json({ error: 'credenciales inválidas' });
+  }
+
+  clearAuthFailures(ip);
+  const now = Date.now();
+  const sessionId = crypto.randomBytes(24).toString('base64url');
+  await withConfigLock(async () => {
+    const current = loadConfig();
+    current.auth = current.auth || {};
+    const sessions = Array.isArray(current.auth.sessions) ? current.auth.sessions : [];
+    current.auth.sessions = sessions
+      .filter(s => s.expiresAt > now)
+      .concat([{ id: sessionId, createdAt: now, expiresAt: now + SESSION_TTL_MS, ip }]);
+    saveConfig(current);
+  });
+
+  const secureAttr = req.secure || req.get('x-forwarded-proto') === 'https' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${encodeURIComponent(sessionId)}; Path=/; HttpOnly; SameSite=Strict${secureAttr}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`);
+  audit.log({ action: 'auth.success', ip, path: '/api/auth/login' });
+  return res.json({ ok: true });
+});
+
 app.get('/api/keygen', async (req, res) => {
   try {
     const keys = await wgApi('/keygen');
@@ -909,6 +1017,17 @@ app.get('/api/health', (req, res) => {
     return res.json(JSON.parse(fs.readFileSync(HEALTH_FILE, 'utf8')));
   } catch {
     return res.json({});
+  }
+});
+
+app.post('/api/health/refresh', async (req, res) => {
+  await refreshHealthSnapshot();
+  if (!fs.existsSync(HEALTH_FILE)) return res.json({ ok: false, health: {} });
+  try {
+    const health = JSON.parse(fs.readFileSync(HEALTH_FILE, 'utf8'));
+    return res.json({ ok: true, health });
+  } catch {
+    return res.json({ ok: false, health: {} });
   }
 });
 
@@ -978,13 +1097,41 @@ app.get('/api/audit', (req, res) => {
 
 // ── boot ─────────────────────────────────────────────────────────────────────
 
-ensureDataDir();
-API_AUTH_TOKEN = loadOrCreateApiToken();
-migrateConfigIfNeeded();
-refreshHealthSnapshot();
-const healthTimer = setInterval(() => {
+let healthTimer = null;
+
+function startServer() {
+  ensureDataDir();
+  API_AUTH_TOKEN = loadOrCreateApiToken();
+  migrateConfigIfNeeded();
   refreshHealthSnapshot();
-}, 5 * 60 * 1000);
-if (typeof healthTimer.unref === 'function') healthTimer.unref();
-const PORT = parseInt(process.env.PORT) || 3000;
-app.listen(PORT, () => console.log(`[web] Umbrel Tunnel UI en :${PORT}`));
+  if (!healthTimer) {
+    healthTimer = setInterval(() => {
+      refreshHealthSnapshot();
+    }, 5 * 60 * 1000);
+    if (typeof healthTimer.unref === 'function') healthTimer.unref();
+  }
+  const parsedPort = parseInt(process.env.PORT, 10);
+  const PORT = Number.isFinite(parsedPort) ? parsedPort : 3000;
+  const server = app.listen(PORT, () => {
+    const actualPort = server.address() && server.address().port ? server.address().port : PORT;
+    console.log(`[web] Umbrel Tunnel UI en :${actualPort}`);
+  });
+  return server;
+}
+
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = {
+  app,
+  startServer,
+  _internals: {
+    keyFingerprint,
+    validateEmailWithMx,
+    buildBackupPayload,
+    restoreBackupPayload,
+    loadConfig,
+    saveConfig
+  }
+};
