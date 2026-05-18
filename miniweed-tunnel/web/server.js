@@ -860,6 +860,21 @@ echo " Pega esta clave en Umbrel Tunnel y listo."
 `;
 }
 
+function buildKillSwitchScript() {
+  return `#!/usr/bin/env bash
+set -euo pipefail
+
+echo "[killswitch] stopping wg0"
+systemctl stop wg-quick@wg0 || true
+
+echo "[killswitch] blocking udp/51820"
+iptables -C INPUT -p udp --dport 51820 -j DROP 2>/dev/null || iptables -A INPUT -p udp --dport 51820 -j DROP
+
+echo "killed at $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /var/run/miniweed.status
+echo "[killswitch] completed"
+`;
+}
+
 function buildVpsRotateScript(cfg, next) {
   const pskLine = next.presharedKey ? `PresharedKey = ${next.presharedKey}` : '';
   return `#!/usr/bin/env bash
@@ -1019,7 +1034,9 @@ function restoreBackupPayload(payload, passphrase) {
   decipher.setAuthTag(tag);
   const compressed = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
   const data = zlib.gunzipSync(compressed);
-  return parseBackupEntries(data);
+  const entries = parseBackupEntries(data);
+  if (!entries['meta.json']) throw new Error('backup sin meta.json');
+  return entries;
 }
 
 function wgApi(urlPath) {
@@ -1390,9 +1407,20 @@ app.post('/api/restore', express.raw({ type: 'application/octet-stream', limit: 
     if (!meta || meta.version !== 1) {
       return res.status(400).json({ error: 'meta inválida en backup' });
     }
-    if (entries['config.json']) fs.writeFileSync(CONFIG_FILE, entries['config.json'], { mode: 0o600 });
-    if (entries['known_hosts.json']) fs.writeFileSync(KNOWN_HOSTS_FILE, entries['known_hosts.json'], { mode: 0o600 });
-    if (entries['audit.log']) fs.writeFileSync(path.join(DATA_DIR, 'audit.log'), entries['audit.log'], { mode: 0o600 });
+
+    if (entries['config.json']) JSON.parse(entries['config.json']);
+    if (entries['known_hosts.json']) JSON.parse(entries['known_hosts.json']);
+
+    const restoreDir = path.join(DATA_DIR, '.restore-staging');
+    fs.mkdirSync(restoreDir, { recursive: true });
+    if (entries['config.json']) fs.writeFileSync(path.join(restoreDir, 'config.json'), entries['config.json'], { mode: 0o600 });
+    if (entries['known_hosts.json']) fs.writeFileSync(path.join(restoreDir, 'known_hosts.json'), entries['known_hosts.json'], { mode: 0o600 });
+    if (entries['audit.log']) fs.writeFileSync(path.join(restoreDir, 'audit.log'), entries['audit.log'], { mode: 0o600 });
+
+    if (entries['config.json']) fs.renameSync(path.join(restoreDir, 'config.json'), CONFIG_FILE);
+    if (entries['known_hosts.json']) fs.renameSync(path.join(restoreDir, 'known_hosts.json'), KNOWN_HOSTS_FILE);
+    if (entries['audit.log']) fs.renameSync(path.join(restoreDir, 'audit.log'), path.join(DATA_DIR, 'audit.log'));
+
     migrateConfigIfNeeded();
     refreshHealthSnapshot();
     audit.log({ action: 'backup.restore', ip: req.ip });
@@ -1426,6 +1454,10 @@ app.get('/api/audit', (req, res) => {
   res.json({ entries, total: entries.length });
 });
 
+app.get('/api/audit/verify', (req, res) => {
+  res.json(audit.verifyChain());
+});
+
 app.get('/api/openapi.json', (req, res) => {
   res.json({
     openapi: '3.1.0',
@@ -1446,9 +1478,29 @@ app.get('/api/openapi.json', (req, res) => {
       },
       '/api/auth/verify': {
         post: { summary: 'Verify challenge signature and issue session' }
+      },
+      '/api/rotate/prepare': {
+        post: { summary: 'Prepare key rotation and generate rollback script' }
+      },
+      '/api/rotate/confirm': {
+        post: { summary: 'Confirm or cancel prepared key rotation' }
+      },
+      '/api/kill-switch/script': {
+        get: { summary: 'Download VPS killswitch script' }
       }
     }
   });
+});
+
+app.get('/api/kill-switch/script', (req, res) => {
+  const script = buildKillSwitchScript();
+  const sha256 = crypto.createHash('sha256').update(script).digest('hex');
+  if (req.query.format === 'plain') {
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="miniweed-killswitch.sh"');
+    return res.send(script);
+  }
+  return res.json({ script, sha256, filename: 'miniweed-killswitch.sh' });
 });
 
 app.post('/api/rotate/prepare', async (req, res) => {

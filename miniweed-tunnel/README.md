@@ -79,3 +79,36 @@ curl -sS "$API_URL/api/config" -H "Cookie: mw_session=$SESSION_TOKEN"
 ```
 
 Nota: el backend espera firma Ed25519 "raw" en base64 sobre los bytes del `nonce` (después de decodificar base64).
+
+## Rotación de claves (manual asistida)
+
+1. Preparar plan de rotación y script de rollback VPS:
+
+```bash
+curl -sS -X POST "$API_URL/api/rotate/prepare" \
+  -H "Content-Type: application/json" \
+  -H "x-tunnel-api-token: $API_TOKEN"
+```
+
+2. Ejecutar en el VPS el script retornado por el endpoint.
+3. Confirmar desde API:
+
+```bash
+curl -sS -X POST "$API_URL/api/rotate/confirm" \
+  -H "Content-Type: application/json" \
+  -H "x-tunnel-api-token: $API_TOKEN" \
+  -d '{"planId":"<planId>","apply":true}'
+```
+
+## Kill switch remoto (script)
+
+Descarga de script de emergencia:
+
+```bash
+curl -sS "$API_URL/api/kill-switch/script?format=plain" \
+  -H "x-tunnel-api-token: $API_TOKEN" \
+  -o miniweed-killswitch.sh
+chmod +x miniweed-killswitch.sh
+```
+
+El script detiene `wg-quick@wg0` y bloquea UDP/51820.

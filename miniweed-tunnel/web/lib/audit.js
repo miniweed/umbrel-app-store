@@ -51,6 +51,30 @@ function readLatest(limit = 100) {
   return lines.slice(-limit).map(line => JSON.parse(line));
 }
 
+function verifyChain() {
+  if (!fs.existsSync(AUDIT_PATH)) return { ok: true, entries: 0 };
+  const lines = fs.readFileSync(AUDIT_PATH, 'utf8').trim().split('\n').filter(Boolean);
+  let prev = '0'.repeat(64);
+  for (let i = 0; i < lines.length; i += 1) {
+    let parsed;
+    try {
+      parsed = JSON.parse(lines[i]);
+    } catch {
+      return { ok: false, entries: lines.length, brokenAt: i, reason: 'invalid_json' };
+    }
+    if (parsed.prevHash !== prev) {
+      return { ok: false, entries: lines.length, brokenAt: i, reason: 'prev_hash_mismatch' };
+    }
+    const { hash, ...rest } = parsed;
+    const expected = crypto.createHash('sha256').update(prev + JSON.stringify(rest)).digest('hex');
+    if (hash !== expected) {
+      return { ok: false, entries: lines.length, brokenAt: i, reason: 'hash_mismatch' };
+    }
+    prev = hash;
+  }
+  return { ok: true, entries: lines.length };
+}
+
 init();
 
-module.exports = { log, readLatest };
+module.exports = { log, readLatest, verifyChain };

@@ -263,4 +263,25 @@ describe('api hardening', () => {
     expect(confirmBody.applied).toBe(true);
     expect(confirmBody.nextPublicKey).toBeTruthy();
   });
+
+  test('returns kill switch script with sha', async () => {
+    const r = await req(port, 'GET', '/api/kill-switch/script', null, {
+      'x-tunnel-api-token': token
+    });
+    expect(r.status).toBe(200);
+    const body = JSON.parse(r.body);
+    expect(body.filename).toBe('miniweed-killswitch.sh');
+    expect(body.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(body.script).toContain('wg-quick@wg0');
+  });
+
+  test('returns audit chain verification status', async () => {
+    const r = await req(port, 'GET', '/api/audit/verify', null, {
+      'x-tunnel-api-token': token
+    });
+    expect(r.status).toBe(200);
+    const body = JSON.parse(r.body);
+    expect(typeof body.ok).toBe('boolean');
+    expect(typeof body.entries).toBe('number');
+  });
 });
