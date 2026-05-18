@@ -362,6 +362,7 @@
       </div>
       <div class="btn-row">
         <button class="btn btn-secondary" onclick="setUiPassword()">Guardar contraseña UI</button>
+        <button class="btn btn-secondary" onclick="logoutUiSession()">Cerrar sesión UI</button>
         <span id="auth-msg" class="text-sm" style="align-self:center"></span>
       </div>
     </div>
@@ -547,6 +548,15 @@ async function showLoginPrompt() {
     return;
   }
   await loadConfig();
+}
+
+async function logoutUiSession() {
+  const res = await apiFetch('/api/auth/logout', { method: 'POST' });
+  if (!res.ok) {
+    alert('No se pudo cerrar sesión.');
+    return;
+  }
+  alert('Sesión cerrada.');
 }
 
 // ── Save config ───────────────────────────────────────────────────────────────

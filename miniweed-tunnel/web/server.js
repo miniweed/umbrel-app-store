@@ -987,6 +987,23 @@ app.post('/api/auth/login', async (req, res) => {
   return res.json({ ok: true });
 });
 
+app.post('/api/auth/logout', async (req, res) => {
+  const cookies = parseCookies(req);
+  const sessionId = cookies[SESSION_COOKIE] || '';
+  const now = Date.now();
+  await withConfigLock(async () => {
+    const cfg = loadConfig();
+    cfg.auth = cfg.auth || {};
+    const sessions = Array.isArray(cfg.auth.sessions) ? cfg.auth.sessions : [];
+    cfg.auth.sessions = sessions.filter(s => s.expiresAt > now && s.id !== sessionId);
+    saveConfig(cfg);
+  });
+  const secureAttr = req.secure || req.get('x-forwarded-proto') === 'https' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict${secureAttr}; Max-Age=0`);
+  audit.log({ action: 'auth.logout', ip: req.ip || req.socket?.remoteAddress || 'unknown' });
+  return res.json({ ok: true });
+});
+
 app.get('/api/keygen', async (req, res) => {
   try {
     const keys = await wgApi('/keygen');

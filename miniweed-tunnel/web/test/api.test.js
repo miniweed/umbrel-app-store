@@ -140,6 +140,23 @@ describe('api hardening', () => {
       'Content-Type': 'application/json'
     });
     expect(login.status).toBe(200);
-    expect(String(login.headers['set-cookie'] || '')).toContain('mw_session=');
+    const setCookie = Array.isArray(login.headers['set-cookie']) ? login.headers['set-cookie'][0] : String(login.headers['set-cookie'] || '');
+    expect(setCookie).toContain('mw_session=');
+
+    const sessionValue = setCookie.split(';')[0].split('=')[1];
+    const bySession = await req(port, 'GET', '/api/config', null, {
+      Cookie: `mw_session=${sessionValue}`
+    });
+    expect(bySession.status).toBe(200);
+
+    const logout = await req(port, 'POST', '/api/auth/logout', null, {
+      Cookie: `mw_session=${sessionValue}`
+    });
+    expect(logout.status).toBe(200);
+
+    const afterLogout = await req(port, 'GET', '/api/config', null, {
+      Cookie: `mw_session=${sessionValue}`
+    });
+    expect(afterLogout.status).toBe(401);
   });
 });
