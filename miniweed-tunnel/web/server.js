@@ -531,11 +531,29 @@ WGEOF
 chmod 600 /etc/wireguard/wg0.conf
 
 systemctl enable wg-quick@wg0
-systemctl start wg-quick@wg0
+if systemctl is-active --quiet wg-quick@wg0; then
+  systemctl restart wg-quick@wg0
+else
+  systemctl start wg-quick@wg0
+fi
 
 if ! systemctl is-active --quiet wg-quick@wg0; then
   /root/miniweed-rollback-firewall.sh || true
   echo "WireGuard no arrancó correctamente. Firewall restaurado."
+  exit 1
+fi
+
+ACTIVE_PUB=$(wg show wg0 public-key 2>/dev/null || true)
+if [ -z "$ACTIVE_PUB" ]; then
+  /root/miniweed-rollback-firewall.sh || true
+  echo "No se pudo leer la clave publica activa de wg0 tras aplicar la configuracion."
+  exit 1
+fi
+if [ "$ACTIVE_PUB" != "$VPS_PUB" ]; then
+  /root/miniweed-rollback-firewall.sh || true
+  echo "La clave activa de wg0 no coincide con la nueva clave generada."
+  echo "Esperada: $VPS_PUB"
+  echo "Activa:   $ACTIVE_PUB"
   exit 1
 fi
 
