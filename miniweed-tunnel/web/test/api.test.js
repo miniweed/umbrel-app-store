@@ -284,4 +284,27 @@ describe('api hardening', () => {
     expect(typeof body.ok).toBe('boolean');
     expect(typeof body.entries).toBe('number');
   });
+
+  test('rejects rotate prepare with only one key', async () => {
+    const r = await req(port, 'POST', '/api/rotate/prepare', JSON.stringify({
+      nextPrivateKey: 'C'.repeat(43) + '='
+    }), {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(r.status).toBe(400);
+    const body = JSON.parse(r.body);
+    expect(body.error).toBe('validation');
+  });
+
+  test('openapi includes rotate and audit schemas', async () => {
+    const r = await req(port, 'GET', '/api/openapi.json', null, {
+      'x-tunnel-api-token': token
+    });
+    expect(r.status).toBe(200);
+    const body = JSON.parse(r.body);
+    expect(body.components.schemas.RotatePrepareRequest).toBeTruthy();
+    expect(body.paths['/api/rotate/{planId}']).toBeTruthy();
+    expect(body.paths['/api/audit/verify']).toBeTruthy();
+  });
 });

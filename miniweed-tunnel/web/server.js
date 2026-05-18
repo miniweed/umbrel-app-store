@@ -6,7 +6,7 @@ const https = require('https');
 const zlib = require('zlib');
 const crypto = require('crypto');
 const dns = require('dns');
-const { ConfigSchema } = require('./api-spec/schemas');
+const { ConfigSchema, RotatePrepareSchema, RotateConfirmSchema } = require('./api-spec/schemas');
 const { seal, open, isSealed } = require('./lib/cryptobox');
 const audit = require('./lib/audit');
 
@@ -1465,6 +1465,81 @@ app.get('/api/openapi.json', (req, res) => {
       title: 'Tunnel API',
       version: '1.4.0'
     },
+    components: {
+      schemas: {
+        RotatePrepareRequest: {
+          type: 'object',
+          properties: {
+            nextPrivateKey: { type: 'string', pattern: '^[A-Za-z0-9+/]{43}=$' },
+            nextPublicKey: { type: 'string', pattern: '^[A-Za-z0-9+/]{43}=$' },
+            nextPresharedKey: { type: 'string', pattern: '^[A-Za-z0-9+/]{43}=$' }
+          }
+        },
+        RotateConfirmRequest: {
+          type: 'object',
+          required: ['planId'],
+          properties: {
+            planId: { type: 'string', pattern: '^[a-f0-9]{32}$' },
+            apply: { type: 'boolean', default: true }
+          }
+        },
+        RotatePrepareResponse: {
+          type: 'object',
+          required: ['ok', 'planId', 'expiresInSec', 'nextPublicKey', 'nextPublicKeyFingerprint', 'script', 'scriptSha256'],
+          properties: {
+            ok: { type: 'boolean' },
+            planId: { type: 'string' },
+            expiresInSec: { type: 'integer' },
+            nextPublicKey: { type: 'string' },
+            nextPublicKeyFingerprint: { type: 'string' },
+            script: { type: 'string' },
+            scriptSha256: { type: 'string', pattern: '^[a-f0-9]{64}$' }
+          }
+        },
+        RotateStatusResponse: {
+          type: 'object',
+          required: ['id', 'createdAt', 'expiresAt', 'nextPublicKey', 'nextPublicKeyFingerprint', 'scriptSha256'],
+          properties: {
+            id: { type: 'string' },
+            createdAt: { type: 'integer' },
+            expiresAt: { type: 'integer' },
+            nextPublicKey: { type: 'string' },
+            nextPublicKeyFingerprint: { type: 'string' },
+            scriptSha256: { type: 'string', pattern: '^[a-f0-9]{64}$' }
+          }
+        },
+        RotateConfirmResponse: {
+          type: 'object',
+          required: ['ok'],
+          properties: {
+            ok: { type: 'boolean' },
+            cancelled: { type: 'boolean' },
+            applied: { type: 'boolean' },
+            nextPublicKey: { type: 'string' },
+            nextPublicKeyFingerprint: { type: 'string' }
+          }
+        },
+        KillSwitchScriptResponse: {
+          type: 'object',
+          required: ['script', 'sha256', 'filename'],
+          properties: {
+            script: { type: 'string' },
+            sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+            filename: { type: 'string' }
+          }
+        },
+        AuditVerifyResponse: {
+          type: 'object',
+          required: ['ok', 'entries'],
+          properties: {
+            ok: { type: 'boolean' },
+            entries: { type: 'integer' },
+            brokenAt: { type: 'integer' },
+            reason: { type: 'string' }
+          }
+        }
+      }
+    },
     paths: {
       '/api/config': {
         post: { summary: 'Update configuration' },
@@ -1480,13 +1555,103 @@ app.get('/api/openapi.json', (req, res) => {
         post: { summary: 'Verify challenge signature and issue session' }
       },
       '/api/rotate/prepare': {
-        post: { summary: 'Prepare key rotation and generate rollback script' }
+        post: {
+          summary: 'Prepare key rotation and generate rollback script',
+          requestBody: {
+            required: false,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/RotatePrepareRequest' }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Rotation plan created',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/RotatePrepareResponse' }
+                }
+              }
+            }
+          }
+        }
       },
       '/api/rotate/confirm': {
-        post: { summary: 'Confirm or cancel prepared key rotation' }
+        post: {
+          summary: 'Confirm or cancel prepared key rotation',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/RotateConfirmRequest' }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Rotation plan applied or cancelled',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/RotateConfirmResponse' }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/rotate/{planId}': {
+        get: {
+          summary: 'Get prepared rotation plan status',
+          parameters: [
+            {
+              in: 'path',
+              name: 'planId',
+              required: true,
+              schema: { type: 'string' }
+            }
+          ],
+          responses: {
+            '200': {
+              description: 'Rotation plan status',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/RotateStatusResponse' }
+                }
+              }
+            }
+          }
+        }
       },
       '/api/kill-switch/script': {
-        get: { summary: 'Download VPS killswitch script' }
+        get: {
+          summary: 'Download VPS killswitch script',
+          responses: {
+            '200': {
+              description: 'Script metadata or plain script',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/KillSwitchScriptResponse' }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/audit/verify': {
+        get: {
+          summary: 'Verify audit log hash chain integrity',
+          responses: {
+            '200': {
+              description: 'Audit chain verification report',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AuditVerifyResponse' }
+                }
+              }
+            }
+          }
+        }
       }
     }
   });
@@ -1503,7 +1668,7 @@ app.get('/api/kill-switch/script', (req, res) => {
   return res.json({ script, sha256, filename: 'miniweed-killswitch.sh' });
 });
 
-app.post('/api/rotate/prepare', async (req, res) => {
+app.post('/api/rotate/prepare', validateBody(RotatePrepareSchema), async (req, res) => {
   const cfg = loadConfig();
   if (!cfg.vpsIp || !cfg.publicKey || !cfg.privateKey) {
     return res.status(400).json({ error: 'Configuración incompleta para rotación' });
@@ -1562,7 +1727,7 @@ app.post('/api/rotate/prepare', async (req, res) => {
   }
 });
 
-app.post('/api/rotate/confirm', async (req, res) => {
+app.post('/api/rotate/confirm', validateBody(RotateConfirmSchema), async (req, res) => {
   const planId = String(req.body?.planId || '').trim();
   const apply = req.body?.apply !== false;
   const plan = rotationPlans.get(planId);
