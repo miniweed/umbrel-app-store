@@ -27,6 +27,8 @@ const ENCRYPTED_FIELDS = ['privateKey', 'presharedKey'];
 const SESSION_COOKIE = 'mw_session';
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const loginFailures = new Map();
+const authChallenges = new Map();
+const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 
 const DEFAULT_CONFIG = {
   privateKey: '',
@@ -43,7 +45,8 @@ const DEFAULT_CONFIG = {
   serviceHealth: {},
   auth: {
     passwordHash: '',
-    sessions: []
+    sessions: [],
+    pubkeys: []
   }
 };
 
@@ -139,6 +142,24 @@ function clearAuthFailures(ip) {
   loginFailures.delete(ip);
 }
 
+function cleanupAuthChallenges() {
+  const now = Date.now();
+  for (const [id, challenge] of authChallenges.entries()) {
+    if (!challenge || challenge.expiresAt <= now) authChallenges.delete(id);
+  }
+}
+
+function createSession(ip, source = 'web') {
+  const now = Date.now();
+  return {
+    id: crypto.randomBytes(24).toString('base64url'),
+    createdAt: now,
+    expiresAt: now + SESSION_TTL_MS,
+    ip,
+    source
+  };
+}
+
 function cleanupApiRateStore() {
   const now = Date.now();
   for (const [bucketName, bucketStore] of apiRateStore.entries()) {
@@ -151,6 +172,8 @@ function cleanupApiRateStore() {
 
 const rateGc = setInterval(cleanupApiRateStore, 60 * 1000);
 if (typeof rateGc.unref === 'function') rateGc.unref();
+const challengeGc = setInterval(cleanupAuthChallenges, 60 * 1000);
+if (typeof challengeGc.unref === 'function') challengeGc.unref();
 
 function apiRateLimit(req, res, next) {
   const bucketName = rateBuckets[req.path] ? req.path : 'default';
@@ -177,7 +200,14 @@ function apiRateLimit(req, res, next) {
 }
 
 function requireApiAuth(req, res, next) {
-  if (req.path === '/auth/login' || req.path === '/api/auth/login') return next();
+  if (
+    req.path === '/auth/login'
+    || req.path === '/api/auth/login'
+    || req.path === '/auth/challenge'
+    || req.path === '/auth/verify'
+    || req.path === '/api/auth/challenge'
+    || req.path === '/api/auth/verify'
+  ) return next();
   const headerToken = req.get('x-tunnel-api-token') || '';
   const cookieToken = parseCookies(req).tunnel_api_token || '';
   const sessionToken = parseCookies(req)[SESSION_COOKIE] || '';
@@ -970,21 +1000,165 @@ app.post('/api/auth/login', async (req, res) => {
 
   clearAuthFailures(ip);
   const now = Date.now();
-  const sessionId = crypto.randomBytes(24).toString('base64url');
+  const session = createSession(ip, 'web-password');
   await withConfigLock(async () => {
     const current = loadConfig();
     current.auth = current.auth || {};
     const sessions = Array.isArray(current.auth.sessions) ? current.auth.sessions : [];
     current.auth.sessions = sessions
       .filter(s => s.expiresAt > now)
-      .concat([{ id: sessionId, createdAt: now, expiresAt: now + SESSION_TTL_MS, ip }]);
+      .concat([session]);
     saveConfig(current);
   });
 
   const secureAttr = req.secure || req.get('x-forwarded-proto') === 'https' ? '; Secure' : '';
-  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${encodeURIComponent(sessionId)}; Path=/; HttpOnly; SameSite=Strict${secureAttr}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`);
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${encodeURIComponent(session.id)}; Path=/; HttpOnly; SameSite=Strict${secureAttr}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`);
   audit.log({ action: 'auth.success', ip, path: '/api/auth/login' });
   return res.json({ ok: true });
+});
+
+app.get('/api/auth/sessions', (req, res) => {
+  const cfg = loadConfig();
+  const now = Date.now();
+  const sessions = Array.isArray(cfg.auth?.sessions) ? cfg.auth.sessions.filter(s => s.expiresAt > now) : [];
+  const cookies = parseCookies(req);
+  const currentSessionId = cookies[SESSION_COOKIE] || '';
+  return res.json({
+    sessions: sessions.map(s => ({
+      id: s.id,
+      createdAt: s.createdAt,
+      expiresAt: s.expiresAt,
+      ip: s.ip,
+      source: s.source || 'unknown',
+      current: s.id === currentSessionId
+    }))
+  });
+});
+
+app.delete('/api/auth/sessions/:id', async (req, res) => {
+  const sessionId = String(req.params.id || '').trim();
+  if (!sessionId) return res.status(400).json({ error: 'session id requerida' });
+  const now = Date.now();
+  await withConfigLock(async () => {
+    const cfg = loadConfig();
+    cfg.auth = cfg.auth || {};
+    const sessions = Array.isArray(cfg.auth.sessions) ? cfg.auth.sessions : [];
+    cfg.auth.sessions = sessions.filter(s => s.expiresAt > now && s.id !== sessionId);
+    saveConfig(cfg);
+  });
+  audit.log({ action: 'auth.session.revoke', ip: req.ip || req.socket?.remoteAddress || 'unknown', sessionId });
+  return res.json({ ok: true });
+});
+
+app.post('/api/auth/pubkeys', async (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  const publicKey = String(req.body?.publicKey || '').trim();
+  if (!name || !publicKey) return res.status(400).json({ error: 'name y publicKey requeridos' });
+  let keyObject;
+  try {
+    keyObject = crypto.createPublicKey({ key: Buffer.from(publicKey, 'base64'), format: 'der', type: 'spki' });
+  } catch {
+    return res.status(400).json({ error: 'publicKey inválida (base64 DER SPKI esperado)' });
+  }
+  if (keyObject.asymmetricKeyType !== 'ed25519') {
+    return res.status(400).json({ error: 'solo se permiten claves ed25519' });
+  }
+  const keyId = crypto.createHash('sha256').update(publicKey).digest('hex').slice(0, 16);
+  await withConfigLock(async () => {
+    const cfg = loadConfig();
+    cfg.auth = cfg.auth || {};
+    const pubkeys = Array.isArray(cfg.auth.pubkeys) ? cfg.auth.pubkeys : [];
+    const next = pubkeys.filter(p => p.id !== keyId);
+    next.push({ id: keyId, name, publicKey, addedAt: Date.now() });
+    cfg.auth.pubkeys = next;
+    saveConfig(cfg);
+  });
+  audit.log({ action: 'auth.pubkey.add', ip: req.ip || req.socket?.remoteAddress || 'unknown', keyId, name });
+  return res.json({ ok: true, keyId });
+});
+
+app.get('/api/auth/pubkeys', (req, res) => {
+  const cfg = loadConfig();
+  const pubkeys = Array.isArray(cfg.auth?.pubkeys) ? cfg.auth.pubkeys : [];
+  res.json({ pubkeys: pubkeys.map(p => ({ id: p.id, name: p.name, addedAt: p.addedAt })) });
+});
+
+app.delete('/api/auth/pubkeys/:id', async (req, res) => {
+  const keyId = String(req.params.id || '').trim();
+  if (!keyId) return res.status(400).json({ error: 'key id requerida' });
+  await withConfigLock(async () => {
+    const cfg = loadConfig();
+    cfg.auth = cfg.auth || {};
+    const pubkeys = Array.isArray(cfg.auth.pubkeys) ? cfg.auth.pubkeys : [];
+    cfg.auth.pubkeys = pubkeys.filter(p => p.id !== keyId);
+    saveConfig(cfg);
+  });
+  audit.log({ action: 'auth.pubkey.remove', ip: req.ip || req.socket?.remoteAddress || 'unknown', keyId });
+  return res.json({ ok: true });
+});
+
+app.post('/api/auth/challenge', (req, res) => {
+  const keyId = String(req.body?.keyId || '').trim();
+  if (!keyId) return res.status(400).json({ error: 'keyId requerido' });
+  const cfg = loadConfig();
+  const pubkeys = Array.isArray(cfg.auth?.pubkeys) ? cfg.auth.pubkeys : [];
+  const key = pubkeys.find(p => p.id === keyId);
+  if (!key) return res.status(401).json({ error: 'clave no registrada' });
+  const challengeId = crypto.randomBytes(16).toString('hex');
+  const nonce = crypto.randomBytes(32).toString('base64');
+  const now = Date.now();
+  authChallenges.set(challengeId, {
+    keyId,
+    nonce,
+    createdAt: now,
+    expiresAt: now + CHALLENGE_TTL_MS,
+    ip: req.ip || req.socket?.remoteAddress || 'unknown'
+  });
+  return res.json({ challengeId, nonce, expiresInSec: Math.floor(CHALLENGE_TTL_MS / 1000) });
+});
+
+app.post('/api/auth/verify', async (req, res) => {
+  const challengeId = String(req.body?.challengeId || '').trim();
+  const signatureB64 = String(req.body?.signature || '').trim();
+  if (!challengeId || !signatureB64) {
+    return res.status(400).json({ error: 'challengeId y signature requeridos' });
+  }
+  const challenge = authChallenges.get(challengeId);
+  if (!challenge || challenge.expiresAt <= Date.now()) {
+    authChallenges.delete(challengeId);
+    return res.status(401).json({ error: 'challenge expirada o inválida' });
+  }
+  authChallenges.delete(challengeId);
+
+  const cfg = loadConfig();
+  const pubkeys = Array.isArray(cfg.auth?.pubkeys) ? cfg.auth.pubkeys : [];
+  const key = pubkeys.find(p => p.id === challenge.keyId);
+  if (!key) return res.status(401).json({ error: 'clave no encontrada' });
+
+  let verified = false;
+  try {
+    const publicKey = crypto.createPublicKey({ key: Buffer.from(key.publicKey, 'base64'), format: 'der', type: 'spki' });
+    verified = crypto.verify(null, Buffer.from(challenge.nonce, 'base64'), publicKey, Buffer.from(signatureB64, 'base64'));
+  } catch {
+    verified = false;
+  }
+  if (!verified) {
+    audit.log({ action: 'auth.fail', ip: req.ip || req.socket?.remoteAddress || 'unknown', path: '/api/auth/verify' });
+    return res.status(401).json({ error: 'firma inválida' });
+  }
+
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  const session = createSession(ip, `pubkey:${challenge.keyId}`);
+  await withConfigLock(async () => {
+    const current = loadConfig();
+    current.auth = current.auth || {};
+    const now = Date.now();
+    const sessions = Array.isArray(current.auth.sessions) ? current.auth.sessions : [];
+    current.auth.sessions = sessions.filter(s => s.expiresAt > now).concat([session]);
+    saveConfig(current);
+  });
+  audit.log({ action: 'auth.success', ip, path: '/api/auth/verify', keyId: challenge.keyId });
+  return res.json({ ok: true, sessionToken: session.id, expiresAt: session.expiresAt });
 });
 
 app.post('/api/auth/logout', async (req, res) => {

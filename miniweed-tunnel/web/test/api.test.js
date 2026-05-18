@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 
 jest.mock('dns', () => ({
   promises: {
@@ -158,5 +159,44 @@ describe('api hardening', () => {
       Cookie: `mw_session=${sessionValue}`
     });
     expect(afterLogout.status).toBe(401);
+  });
+
+  test('pubkey challenge verify flow creates CLI session', async () => {
+    const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+    const publicDerB64 = publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
+
+    const add = await req(port, 'POST', '/api/auth/pubkeys', JSON.stringify({
+      name: 'cli-test',
+      publicKey: publicDerB64
+    }), {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(add.status).toBe(200);
+    const addBody = JSON.parse(add.body);
+    expect(addBody.keyId).toBeTruthy();
+
+    const challenge = await req(port, 'POST', '/api/auth/challenge', JSON.stringify({ keyId: addBody.keyId }), {
+      'Content-Type': 'application/json'
+    });
+    expect(challenge.status).toBe(200);
+    const challengeBody = JSON.parse(challenge.body);
+    expect(challengeBody.challengeId).toBeTruthy();
+    const signature = crypto.sign(null, Buffer.from(challengeBody.nonce, 'base64'), privateKey).toString('base64');
+
+    const verify = await req(port, 'POST', '/api/auth/verify', JSON.stringify({
+      challengeId: challengeBody.challengeId,
+      signature
+    }), {
+      'Content-Type': 'application/json'
+    });
+    expect(verify.status).toBe(200);
+    const verifyBody = JSON.parse(verify.body);
+    expect(verifyBody.sessionToken).toBeTruthy();
+
+    const bySession = await req(port, 'GET', '/api/config', null, {
+      Cookie: `mw_session=${verifyBody.sessionToken}`
+    });
+    expect(bySession.status).toBe(200);
   });
 });

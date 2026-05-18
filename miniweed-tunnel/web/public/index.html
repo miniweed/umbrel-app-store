@@ -365,6 +365,22 @@
         <button class="btn btn-secondary" onclick="logoutUiSession()">Cerrar sesión UI</button>
         <span id="auth-msg" class="text-sm" style="align-self:center"></span>
       </div>
+
+      <div class="field mt-4">
+        <label>Añadir clave pública Ed25519 (DER SPKI en base64)</label>
+        <input type="text" id="pubkeyName" placeholder="Nombre del dispositivo">
+        <input type="text" id="pubkeyValue" placeholder="Clave pública base64" style="margin-top:8px">
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-secondary" onclick="addAuthPubkey()">Añadir clave pública</button>
+        <button class="btn btn-secondary" onclick="loadAuthPubkeys()">Refrescar claves</button>
+      </div>
+      <div id="pubkeys-list" class="status-raw mt-2">Sin claves registradas</div>
+
+      <div class="btn-row mt-4">
+        <button class="btn btn-secondary" onclick="loadAuthSessions()">Ver sesiones activas</button>
+      </div>
+      <div id="sessions-list" class="status-raw mt-2">Sin sesiones activas</div>
     </div>
 
     <div class="btn-row">
@@ -509,6 +525,8 @@ async function loadConfig() {
   if (!cfg.publicKey || !cfg.vpsPubKey || !cfg.vpsIp) {
     document.getElementById('setup-wizard').classList.remove('hidden');
   }
+  loadAuthPubkeys();
+  loadAuthSessions();
 }
 
 async function setUiPassword() {
@@ -557,6 +575,92 @@ async function logoutUiSession() {
     return;
   }
   alert('Sesión cerrada.');
+}
+
+async function loadAuthPubkeys() {
+  const target = document.getElementById('pubkeys-list');
+  if (!target) return;
+  const res = await apiFetch('/api/auth/pubkeys');
+  if (!res.ok) {
+    target.textContent = 'No se pudieron cargar las claves.';
+    return;
+  }
+  const body = await res.json();
+  const pubkeys = Array.isArray(body.pubkeys) ? body.pubkeys : [];
+  if (!pubkeys.length) {
+    target.textContent = 'Sin claves registradas';
+    return;
+  }
+  target.innerHTML = pubkeys.map(k => {
+    const added = new Date(k.addedAt || Date.now()).toLocaleString();
+    return `<div style="margin-bottom:8px">${esc(k.name)} (${esc(k.id)}) - ${esc(added)} <button class="btn btn-danger btn-sm" onclick="removeAuthPubkey('${esc(k.id)}')">Eliminar</button></div>`;
+  }).join('');
+}
+
+async function addAuthPubkey() {
+  const msg = document.getElementById('auth-msg');
+  const name = document.getElementById('pubkeyName').value.trim();
+  const publicKey = document.getElementById('pubkeyValue').value.trim();
+  if (!name || !publicKey) {
+    msg.style.color = '#f87171';
+    msg.textContent = 'Nombre y clave son obligatorios.';
+    return;
+  }
+  const res = await apiFetch('/api/auth/pubkeys', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, publicKey })
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    msg.style.color = '#f87171';
+    msg.textContent = body.error || 'No se pudo añadir la clave.';
+    return;
+  }
+  msg.style.color = '#4ade80';
+  msg.textContent = `Clave añadida (${body.keyId || 'ok'}).`;
+  document.getElementById('pubkeyName').value = '';
+  document.getElementById('pubkeyValue').value = '';
+  loadAuthPubkeys();
+}
+
+async function removeAuthPubkey(id) {
+  const res = await apiFetch(`/api/auth/pubkeys/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) {
+    alert('No se pudo eliminar la clave.');
+    return;
+  }
+  loadAuthPubkeys();
+}
+
+async function loadAuthSessions() {
+  const target = document.getElementById('sessions-list');
+  if (!target) return;
+  const res = await apiFetch('/api/auth/sessions');
+  if (!res.ok) {
+    target.textContent = 'No se pudieron cargar las sesiones.';
+    return;
+  }
+  const body = await res.json();
+  const sessions = Array.isArray(body.sessions) ? body.sessions : [];
+  if (!sessions.length) {
+    target.textContent = 'Sin sesiones activas';
+    return;
+  }
+  target.innerHTML = sessions.map(s => {
+    const exp = new Date(s.expiresAt).toLocaleString();
+    const current = s.current ? ' (actual)' : '';
+    return `<div style="margin-bottom:8px">${esc(s.id)}${current} - expira ${esc(exp)} - ${esc(s.source || 'unknown')} <button class="btn btn-danger btn-sm" onclick="revokeSession('${esc(s.id)}')">Revocar</button></div>`;
+  }).join('');
+}
+
+async function revokeSession(id) {
+  const res = await apiFetch(`/api/auth/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) {
+    alert('No se pudo revocar la sesión.');
+    return;
+  }
+  loadAuthSessions();
 }
 
 // ── Save config ───────────────────────────────────────────────────────────────
