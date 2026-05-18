@@ -811,15 +811,20 @@ async function deployToVps(buttonEl) {
         msg.style.color = '#4ade80';
         const fingerprint = status.vpsPubKeyFingerprint ? ` (${status.vpsPubKeyFingerprint})` : '';
         const keySyncNote = status.keySyncMessage ? ` ${status.keySyncMessage}` : '';
+        const sshUserNote = status.sshUserUsed
+          ? (status.sshUserFallbackUsed
+              ? ` Se uso usuario SSH alternativo: ${status.sshUserUsed}.`
+              : ` Usuario SSH: ${status.sshUserUsed}.`)
+          : '';
         const handshakeNote = status.handshakeOk
           ? ' Handshake WireGuard detectado.'
           : ' Aun sin handshake inmediato; puede tardar unos segundos.';
         if (status.autoConfigured) {
-          msg.textContent = `Deploy ejecutado y clave VPS configurada automaticamente${fingerprint}.${keySyncNote}${handshakeNote}`;
+          msg.textContent = `Deploy ejecutado y clave VPS configurada automaticamente${fingerprint}.${keySyncNote}${sshUserNote}${handshakeNote}`;
           await loadConfig();
           updateSteps();
         } else {
-          msg.textContent = `Deploy ejecutado correctamente.${keySyncNote}`;
+          msg.textContent = `Deploy ejecutado correctamente.${keySyncNote}${sshUserNote}`;
         }
         return;
       }

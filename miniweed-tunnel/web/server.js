@@ -42,6 +42,7 @@ const apiRateMax = 120;
 const apiRateStore = new Map();
 const deployJobTtlMs = 60 * 60 * 1000;
 const deployJobMax = 200;
+const SSH_COMMON_FALLBACK_USERS = ['debian', 'ubuntu', 'admin', 'ec2-user'];
 
 app.set('trust proxy', 1);
 
@@ -583,6 +584,43 @@ function validateSshDeployInput(input) {
   };
 }
 
+function extractSuggestedSshUser(text) {
+  if (!text) return '';
+  const match = String(text).match(/Please login as the user\s+["']?([a-z_][a-z0-9_-]*)["']?/i);
+  return match ? match[1] : '';
+}
+
+function isSshAuthLikeFailure(text) {
+  const value = String(text || '').toLowerCase();
+  if (!value) return false;
+  return [
+    'please login as the user',
+    'permission denied',
+    'authentication methods failed',
+    'all configured authentication methods failed',
+    'publickey',
+    'root login',
+    'login as the user',
+    'access denied',
+    'code 142'
+  ].some(snippet => value.includes(snippet));
+}
+
+function buildSshUserCandidates(requestedUser) {
+  const first = (requestedUser || 'root').trim() || 'root';
+  if (first !== 'root') return [first];
+  return [first, ...SSH_COMMON_FALLBACK_USERS].filter((user, idx, arr) => arr.indexOf(user) === idx);
+}
+
+function shellSingleQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function asPrivilegedShellCommand(sshConfig, command) {
+  if ((sshConfig?.user || '').trim() === 'root') return command;
+  return `sudo -n bash -lc ${shellSingleQuote(command)}`;
+}
+
 function runRemoteCommand(ssh, command, timeoutMs = 20 * 60 * 1000) {
   return new Promise((resolve, reject) => {
     let stdout = '';
@@ -619,13 +657,14 @@ function deployScriptOverSsh(sshConfig, script) {
       try {
         const encoded = Buffer.from(script, 'utf8').toString('base64');
         const remotePath = '/root/miniweed-tunnel-vps-setup.sh';
-        const cmd = [
+        const rawCmd = [
           `printf '%s' '${encoded}' | base64 -d > ${remotePath}`,
           `chmod 700 ${remotePath}`,
           `bash -n ${remotePath}`,
           `bash ${remotePath} > /root/miniweed-tunnel-vps-setup.last.log 2>&1 || (cat /root/miniweed-tunnel-vps-setup.last.log && exit 1)`,
           `cat /root/miniweed-tunnel-vps-setup.last.log`
         ].join(' && ');
+        const cmd = asPrivilegedShellCommand(sshConfig, rawCmd);
 
         const result = await runRemoteCommand(ssh, cmd);
         ssh.end();
@@ -651,6 +690,39 @@ function deployScriptOverSsh(sshConfig, script) {
       readyTimeout: 20000
     });
   });
+}
+
+async function deployWithSshUserFallback(sshConfig, script) {
+  const users = buildSshUserCandidates(sshConfig.user);
+  let lastErr;
+  let attemptedUsers = [];
+
+  for (let i = 0; i < users.length; i += 1) {
+    const username = users[i];
+    const attemptConfig = { ...sshConfig, user: username };
+    attemptedUsers = [...attemptedUsers, username];
+
+    try {
+      await deployScriptOverSsh(attemptConfig, '#!/bin/bash\nset -e\necho "SSH preflight OK"\n');
+      const result = await deployScriptOverSsh(attemptConfig, script);
+      return { result, sshConfig: attemptConfig, attemptedUsers };
+    } catch (err) {
+      lastErr = err;
+      const combined = `${err?.message || ''}\n${err?.stdout || ''}\n${err?.stderr || ''}`;
+      const suggestedUser = extractSuggestedSshUser(combined);
+      if (suggestedUser && !users.includes(suggestedUser)) {
+        users.splice(i + 1, 0, suggestedUser);
+      }
+
+      const hasMoreCandidates = i < users.length - 1;
+      if (!hasMoreCandidates) break;
+
+      const canRetryDifferentUser = username === 'root' && isSshAuthLikeFailure(combined);
+      if (!canRetryDifferentUser && !suggestedUser) break;
+    }
+  }
+
+  throw lastErr || new Error('No se pudo conectar por SSH');
 }
 
 function runSshCommand(sshConfig, command, timeoutMs = 30 * 1000) {
@@ -690,7 +762,8 @@ function extractVpsPublicKey(text) {
 }
 
 async function readVpsPublicKeyOverSsh(sshConfig) {
-  const result = await runSshCommand(sshConfig, 'wg show wg0 public-key', 30 * 1000);
+  const cmd = asPrivilegedShellCommand(sshConfig, 'wg show wg0 public-key');
+  const result = await runSshCommand(sshConfig, cmd, 30 * 1000);
   const key = (result.stdout || '').trim();
   return isWireGuardKey(key) ? key : '';
 }
@@ -842,12 +915,14 @@ app.post('/api/deploy-vps', async (req, res) => {
 
   (async () => {
     try {
-      await deployScriptOverSsh(parsed, '#!/bin/bash\nset -e\necho "SSH preflight OK"\n');
-      const result = await deployScriptOverSsh(parsed, script);
+      const deployRun = await deployWithSshUserFallback(parsed, script);
+      const result = deployRun.result;
+      const usedSshConfig = deployRun.sshConfig;
+      const attemptedSshUsers = deployRun.attemptedUsers || [parsed.user];
 
       const combinedOutput = `${result.stdout || ''}\n${result.stderr || ''}`;
       const printedVpsPubKey = extractVpsPublicKey(combinedOutput);
-      const readbackVpsPubKey = await readVpsPublicKeyOverSsh(parsed).catch(() => '');
+      const readbackVpsPubKey = await readVpsPublicKeyOverSsh(usedSshConfig).catch(() => '');
       const vpsPubKey = readbackVpsPubKey || printedVpsPubKey;
       let autoConfigured = false;
       let keySyncStatus = 'missing';
@@ -880,7 +955,7 @@ app.post('/api/deploy-vps', async (req, res) => {
         handshake = await waitForHandshake();
 
         if (!handshake.ok && readbackVpsPubKey) {
-          const retryReadback = await readVpsPublicKeyOverSsh(parsed).catch(() => '');
+          const retryReadback = await readVpsPublicKeyOverSsh(usedSshConfig).catch(() => '');
           if (retryReadback && retryReadback !== freshCfg.vpsPubKey) {
             await withConfigLock(async () => {
               const retryCfg = loadConfig();
@@ -910,6 +985,9 @@ app.post('/api/deploy-vps', async (req, res) => {
         stderr: result.stderr || '',
         vpsPubKey,
         vpsPubKeyFingerprint: keyFingerprint(vpsPubKey),
+        sshUserUsed: usedSshConfig.user,
+        sshUserFallbackUsed: usedSshConfig.user !== parsed.user,
+        sshUsersTried: attemptedSshUsers,
         autoConfigured,
         keySyncStatus,
         keySyncMessage,
