@@ -3,6 +3,8 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import subprocess
 import json
 import time
+import base64
+import hashlib
 
 class WGHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -20,7 +22,8 @@ class WGHandler(BaseHTTPRequestHandler):
         if self.path == '/keygen':
             priv = subprocess.check_output(['wg', 'genkey']).decode().strip()
             pub = subprocess.check_output(['wg', 'pubkey'], input=priv.encode()).decode().strip()
-            self.send_json(200, {'privateKey': priv, 'publicKey': pub})
+            psk = subprocess.check_output(['wg', 'genpsk']).decode().strip()
+            self.send_json(200, {'privateKey': priv, 'publicKey': pub, 'presharedKey': psk})
 
         elif self.path == '/status':
             try:
@@ -53,24 +56,38 @@ class WGHandler(BaseHTTPRequestHandler):
                             last_handshake_age_sec = age
 
                 connected = handshaked_peers > 0
+                pub = subprocess.check_output(['wg', 'show', 'wg0', 'public-key'], stderr=subprocess.STDOUT).decode().strip()
             except subprocess.CalledProcessError as e:
                 raw = e.output.decode()
                 connected = False
                 peer_count = 0
                 handshaked_peers = 0
                 last_handshake_age_sec = None
+                pub = ''
             except Exception as e:
                 raw = str(e)
                 connected = False
                 peer_count = 0
                 handshaked_peers = 0
                 last_handshake_age_sec = None
+                pub = ''
+
+            fingerprint = ''
+            if pub:
+                try:
+                    key_bytes = base64.b64decode(pub)
+                    digest = hashlib.sha256(key_bytes).digest()[:16]
+                    fingerprint = ':'.join(f'{b:02x}' for b in digest)
+                except Exception:
+                    fingerprint = ''
             self.send_json(200, {
                 'connected': connected,
                 'raw': raw,
                 'peerCount': peer_count,
                 'handshakedPeers': handshaked_peers,
                 'lastHandshakeAgeSec': last_handshake_age_sec,
+                'publicKey': pub,
+                'publicKeyFingerprint': fingerprint,
             })
 
         else:

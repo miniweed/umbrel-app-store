@@ -3,23 +3,32 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const https = require('https');
+const zlib = require('zlib');
 const crypto = require('crypto');
+const dns = require('dns');
+const { seal, open, isSealed } = require('./lib/cryptobox');
+const audit = require('./lib/audit');
 
 const app = express();
 const DATA_DIR = process.env.DATA_DIR || '/data';
 const WG_API_HOST = process.env.WG_API_HOST || 'wg';
 const WG_API_PORT = 8080;
-const API_AUTH_TOKEN = process.env.TUNNEL_API_TOKEN || '';
+let API_AUTH_TOKEN = '';
 let configLock = Promise.resolve();
 const MAX_SERVICES = 64;
 
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const WG_CONF = path.join(DATA_DIR, 'wg0.conf');
 const CADDYFILE = path.join(DATA_DIR, 'Caddyfile');
+const TOKEN_FILE = path.join(DATA_DIR, 'api-token.enc');
+const HEALTH_FILE = path.join(DATA_DIR, 'health.json');
+const KNOWN_HOSTS_FILE = path.join(DATA_DIR, 'known_hosts.json');
+const ENCRYPTED_FIELDS = ['privateKey', 'presharedKey'];
 
 const DEFAULT_CONFIG = {
   privateKey: '',
   publicKey: '',
+  presharedKey: '',
   vpsIp: '',
   vpsPort: 51820,
   vpsPubKey: '',
@@ -35,9 +44,28 @@ const DEFAULT_CADDYFILE = ':80 {\n  respond "Umbrel Tunnel — not configured ye
 
 app.use(express.json({ limit: '32kb' }));
 app.disable('x-powered-by');
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  const isHttps = req.secure || req.get('x-forwarded-proto') === 'https';
+  if (isHttps) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
+  );
+  next();
+});
 
-const apiRateWindowMs = 60 * 1000;
-const apiRateMax = 120;
+const rateBuckets = {
+  default: { max: 120, windowMs: 60_000 },
+  '/api/keygen': { max: 5, windowMs: 3_600_000 },
+  '/api/vps-setup-script': { max: 10, windowMs: 600_000 },
+  '/api/config': { max: 30, windowMs: 60_000 }
+};
 const apiRateStore = new Map();
 
 app.set('trust proxy', 1);
@@ -68,8 +96,11 @@ function withConfigLock(fn) {
 
 function cleanupApiRateStore() {
   const now = Date.now();
-  for (const [ip, entry] of apiRateStore.entries()) {
-    if (!entry || now > entry.resetAt) apiRateStore.delete(ip);
+  for (const [bucketName, bucketStore] of apiRateStore.entries()) {
+    for (const [ip, entry] of bucketStore.entries()) {
+      if (!entry || now > entry.resetAt) bucketStore.delete(ip);
+    }
+    if (bucketStore.size === 0) apiRateStore.delete(bucketName);
   }
 }
 
@@ -77,17 +108,23 @@ const rateGc = setInterval(cleanupApiRateStore, 60 * 1000);
 if (typeof rateGc.unref === 'function') rateGc.unref();
 
 function apiRateLimit(req, res, next) {
+  const bucketName = rateBuckets[req.path] ? req.path : 'default';
+  const bucket = rateBuckets[bucketName];
+  const store = apiRateStore.get(bucketName) || new Map();
+  apiRateStore.set(bucketName, store);
   const now = Date.now();
   const ip = req.ip || req.socket?.remoteAddress || 'unknown';
-  const entry = apiRateStore.get(ip);
+  const entry = store.get(ip);
 
   if (!entry || now > entry.resetAt) {
-    apiRateStore.set(ip, { count: 1, resetAt: now + apiRateWindowMs });
+    store.set(ip, { count: 1, resetAt: now + bucket.windowMs });
     return next();
   }
 
   entry.count += 1;
-  if (entry.count > apiRateMax) {
+  if (entry.count > bucket.max) {
+    const retryAfter = Math.max(1, Math.ceil((entry.resetAt - now) / 1000));
+    res.setHeader('Retry-After', String(retryAfter));
     return res.status(429).json({ error: 'Demasiadas peticiones, prueba de nuevo en un minuto' });
   }
 
@@ -95,16 +132,36 @@ function apiRateLimit(req, res, next) {
 }
 
 function requireApiAuth(req, res, next) {
-  if (!API_AUTH_TOKEN) return next();
-  const headerToken = req.get('x-tunnel-api-token');
-  const cookieToken = parseCookies(req).tunnel_api_token;
-  if (headerToken !== API_AUTH_TOKEN && cookieToken !== API_AUTH_TOKEN) {
+  const headerToken = req.get('x-tunnel-api-token') || '';
+  const cookieToken = parseCookies(req).tunnel_api_token || '';
+  const expected = Buffer.from(String(API_AUTH_TOKEN).padEnd(128).slice(0, 128));
+  const headerOk = crypto.timingSafeEqual(Buffer.from(String(headerToken).padEnd(128).slice(0, 128)), expected);
+  const cookieOk = crypto.timingSafeEqual(Buffer.from(String(cookieToken).padEnd(128).slice(0, 128)), expected);
+  if (!headerOk && !cookieOk) {
+    audit.log({ action: 'auth.fail', ip: req.ip, path: req.path });
     return res.status(401).json({ error: 'No autorizado' });
+  }
+  if (req.path !== '/status') {
+    audit.log({ action: 'auth.success', ip: req.ip, path: req.path });
   }
   return next();
 }
 
 app.use('/api', apiRateLimit, requireApiAuth);
+app.use((req, res, next) => {
+  res.on('finish', () => {
+    if (!req.path.startsWith('/api/')) return;
+    if (req.method === 'GET' && res.statusCode === 200 && req.path !== '/api/vps-setup-script') return;
+    audit.log({
+      action: `http.${req.method.toLowerCase()}`,
+      path: req.path,
+      status: res.statusCode,
+      ip: req.ip,
+      ua: (req.get('user-agent') || '').slice(0, 120)
+    });
+  });
+  next();
+});
 app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 
 app.get(['/', '/index.html'], (req, res) => {
@@ -128,16 +185,91 @@ function ensureDataDir() {
   }
 }
 
+function encryptConfig(cfg) {
+  const out = { ...cfg, _encVersion: 1 };
+  for (const f of ENCRYPTED_FIELDS) {
+    if (out[f] && !isSealed(out[f])) out[f] = seal(out[f]);
+  }
+  if (Array.isArray(out.services)) {
+    out.services = out.services.map(svc => ({
+      ...svc,
+      target: svc.target && !isSealed(svc.target) ? seal(svc.target) : svc.target
+    }));
+  }
+  return out;
+}
+
+function decryptConfig(cfg) {
+  const out = { ...cfg };
+  for (const f of ENCRYPTED_FIELDS) {
+    if (isSealed(out[f])) out[f] = open(out[f]);
+  }
+  if (Array.isArray(out.services)) {
+    out.services = out.services.map(svc => ({
+      ...svc,
+      target: isSealed(svc.target) ? open(svc.target) : svc.target
+    }));
+  }
+  return out;
+}
+
+function migrateConfigIfNeeded() {
+  if (!fs.existsSync(CONFIG_FILE)) return;
+  try {
+    const raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    if (raw && raw._encVersion === 1) return;
+    const backup = CONFIG_FILE + '.v0.bak';
+    fs.copyFileSync(CONFIG_FILE, backup);
+    fs.chmodSync(backup, 0o600);
+    saveConfig(raw || {});
+    console.log('[migration] config.json encrypted v0 -> v1');
+  } catch (err) {
+    console.error('[migration] failed to migrate config:', err.message);
+  }
+}
+
+function loadOrCreateApiToken() {
+  const seed = (process.env.APP_SEED || process.env.TUNNEL_API_TOKEN || '').trim();
+  if (seed.length >= 32) {
+    const tok = crypto.hkdfSync(
+      'sha256',
+      Buffer.from(seed, 'utf8'),
+      Buffer.from('miniweed-tunnel/v1', 'utf8'),
+      Buffer.from('tunnel-api-token-v1', 'utf8'),
+      32
+    );
+    return Buffer.from(tok).toString('base64url');
+  }
+
+  if (fs.existsSync(TOKEN_FILE)) {
+    try {
+      const blob = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
+      const token = open(blob);
+      if (token && token.length >= 32) return token;
+    } catch {
+      // Continue with failure path.
+    }
+  }
+
+  console.error('FATAL: APP_SEED/TUNNEL_API_TOKEN missing or too short, cannot initialize API token securely.');
+  process.exit(1);
+}
+
 function loadConfig() {
   try {
-    return { ...DEFAULT_CONFIG, ...JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) };
+    const raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    const dec = decryptConfig(raw);
+    return { ...DEFAULT_CONFIG, ...dec };
   } catch {
     return { ...DEFAULT_CONFIG };
   }
 }
 
 function saveConfig(cfg) {
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2));
+  fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
+  const tmp = CONFIG_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(encryptConfig(cfg), null, 2), { mode: 0o600 });
+  fs.renameSync(tmp, CONFIG_FILE);
 }
 
 function isWireGuardKey(value) {
@@ -151,7 +283,9 @@ function isWireGuardKey(value) {
 
 function keyFingerprint(key) {
   if (!isWireGuardKey(key)) return '';
-  return `${key.slice(0, 6)}...${key.slice(-6)}`;
+  const raw = Buffer.from(key, 'base64');
+  const hash = crypto.createHash('sha256').update(raw).digest();
+  return hash.slice(0, 16).toString('hex').match(/.{2}/g).join(':');
 }
 
 function isHostname(value) {
@@ -168,6 +302,19 @@ function isSubdomain(value) {
 
 function isEmail(value) {
   return !value || (typeof value === 'string' && /^[^\s@{}]+@[^\s@{}]+\.[^\s@{}]+$/.test(value));
+}
+
+async function validateEmailWithMx(value) {
+  if (!value) return { ok: true, reason: 'empty' };
+  const match = String(value).match(/^[A-Za-z0-9._%+\-]+@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})$/);
+  if (!match) return { ok: false, reason: 'syntax' };
+  try {
+    const mx = await dns.promises.resolveMx(match[1]);
+    if (!Array.isArray(mx) || mx.length === 0) return { ok: false, reason: 'mx_empty' };
+    return { ok: true, mxCount: mx.length };
+  } catch (err) {
+    return { ok: false, reason: 'mx_lookup_failed', code: err.code || 'unknown' };
+  }
 }
 
 function isTargetUrl(value) {
@@ -302,6 +449,7 @@ function validateConfig(cfg) {
 
 function generateWgConf(cfg) {
   if (!cfg.privateKey || !cfg.vpsPubKey || !cfg.vpsIp) return null;
+  const pskLine = cfg.presharedKey ? `PresharedKey = ${cfg.presharedKey}` : null;
   return [
     '[Interface]',
     `Address = ${cfg.tunnelClientIp}/32`,
@@ -309,11 +457,12 @@ function generateWgConf(cfg) {
     '',
     '[Peer]',
     `PublicKey = ${cfg.vpsPubKey}`,
+    pskLine,
     `Endpoint = ${cfg.vpsIp}:${cfg.vpsPort}`,
     `AllowedIPs = ${cfg.tunnelServerIp}/32`,
     'PersistentKeepalive = 25',
     ''
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 function generateCaddyfile(cfg) {
@@ -329,6 +478,9 @@ function generateCaddyfile(cfg) {
 }
 
 function generateVpsScript(cfg) {
+  const pskLine = cfg.presharedKey
+    ? `PresharedKey = ${cfg.presharedKey}`
+    : '';
   return `#!/bin/bash
 # Umbrel Tunnel — VPS Setup
 # Ejecutar como root en un VPS Debian/Ubuntu
@@ -496,6 +648,7 @@ PrivateKey = $VPS_PRIV
 
 [Peer]
 PublicKey = ${cfg.publicKey}
+${pskLine}
 AllowedIPs = ${cfg.tunnelClientIp}/32
 WGEOF
 
@@ -548,6 +701,105 @@ echo " Pega esta clave en Umbrel Tunnel y listo."
 `;
 }
 
+async function computeHealth(cfg) {
+  const services = cfg?.services || [];
+  const out = {};
+  await Promise.all(services.map(async svc => {
+    const key = serviceKey(svc);
+    if (!svc.enabled || !svc.target) {
+      out[key] = { ok: false, checked: false, message: 'Desactivado o incompleto' };
+      return;
+    }
+    const dnsHost = cfg.domain ? (svc.subdomain ? `${svc.subdomain}.${cfg.domain}` : cfg.domain) : null;
+    const item = { checkedAt: new Date().toISOString() };
+    if (dnsHost) {
+      try {
+        const addrs = await dns.promises.resolve4(dnsHost);
+        item.dns = { ok: addrs.includes(cfg.vpsIp), addrs };
+      } catch (err) {
+        item.dns = { ok: false, error: err.code || err.message };
+      }
+    }
+    const targetProbe = await probeServiceTarget(svc.target, 5000);
+    item.target = targetProbe.ok
+      ? { ok: true, statusCode: targetProbe.statusCode }
+      : { ok: false, error: targetProbe.error || 'probe_failed' };
+    item.ok = Boolean((item.dns ? item.dns.ok : true) && item.target.ok);
+    out[key] = item;
+  }));
+  return out;
+}
+
+async function refreshHealthSnapshot() {
+  try {
+    const cfg = loadConfig();
+    const health = await computeHealth(cfg);
+    fs.writeFileSync(HEALTH_FILE, JSON.stringify(health, null, 2));
+  } catch {
+    // best effort background task
+  }
+}
+
+function buildBackupPayload(passphrase, includeAudit = true) {
+  const chunks = [];
+  const pushEntry = (name, value) => {
+    const body = Buffer.from(value, 'utf8');
+    chunks.push(Buffer.from(`${name}:${body.length}\n`, 'utf8'));
+    chunks.push(body);
+  };
+
+  if (fs.existsSync(CONFIG_FILE)) pushEntry('config.json', fs.readFileSync(CONFIG_FILE, 'utf8'));
+  if (fs.existsSync(KNOWN_HOSTS_FILE)) pushEntry('known_hosts.json', fs.readFileSync(KNOWN_HOSTS_FILE, 'utf8'));
+  if (includeAudit) {
+    const auditPath = path.join(DATA_DIR, 'audit.log');
+    if (fs.existsSync(auditPath)) pushEntry('audit.log', fs.readFileSync(auditPath, 'utf8'));
+  }
+  pushEntry('meta.json', JSON.stringify({ ts: new Date().toISOString(), version: 1 }));
+
+  const compressed = zlib.gzipSync(Buffer.concat(chunks));
+  const salt = crypto.randomBytes(16);
+  const key = crypto.scryptSync(passphrase, salt, 32, { N: 1 << 16, r: 8, p: 1 });
+  const nonce = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
+  const ciphertext = Buffer.concat([cipher.update(compressed), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return Buffer.concat([Buffer.from('MWBK', 'utf8'), salt, nonce, ciphertext, tag]);
+}
+
+function parseBackupEntries(buffer) {
+  const out = {};
+  let idx = 0;
+  while (idx < buffer.length) {
+    const nl = buffer.indexOf(10, idx);
+    if (nl === -1) break;
+    const header = buffer.slice(idx, nl).toString('utf8');
+    idx = nl + 1;
+    const sep = header.lastIndexOf(':');
+    if (sep <= 0) break;
+    const name = header.slice(0, sep);
+    const len = parseInt(header.slice(sep + 1), 10);
+    if (!Number.isFinite(len) || len < 0 || idx + len > buffer.length) break;
+    out[name] = buffer.slice(idx, idx + len).toString('utf8');
+    idx += len;
+  }
+  return out;
+}
+
+function restoreBackupPayload(payload, passphrase) {
+  if (!Buffer.isBuffer(payload) || payload.length < 48) throw new Error('backup payload inválido');
+  if (payload.slice(0, 4).toString('utf8') !== 'MWBK') throw new Error('backup magic inválido');
+  const salt = payload.slice(4, 20);
+  const nonce = payload.slice(20, 32);
+  const tag = payload.slice(payload.length - 16);
+  const ciphertext = payload.slice(32, payload.length - 16);
+  const key = crypto.scryptSync(passphrase, salt, 32, { N: 1 << 16, r: 8, p: 1 });
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
+  decipher.setAuthTag(tag);
+  const compressed = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  const data = zlib.gunzipSync(compressed);
+  return parseBackupEntries(data);
+}
+
 function wgApi(urlPath) {
   return new Promise((resolve, reject) => {
     const req = http.request(
@@ -597,10 +849,21 @@ app.post('/api/config', async (req, res) => {
         : [];
 
       const errors = validateConfig(cfg);
+      const emailCheck = await validateEmailWithMx(cfg.acmeEmail);
+      if (!emailCheck.ok) {
+        errors.push(`El email de Let's Encrypt no supera validación MX (${emailCheck.reason})`);
+      }
       if (errors.length) return { errors };
 
       cfg.serviceHealth = await checkServicesHealth(cfg.services);
       saveConfig(cfg);
+      refreshHealthSnapshot();
+      audit.log({
+        action: 'config.update',
+        domain: cfg.domain,
+        serviceCount: cfg.services.length,
+        ip: req.ip
+      });
 
       const wgConf = generateWgConf(cfg);
       if (wgConf) fs.writeFileSync(WG_CONF, wgConf);
@@ -623,8 +886,10 @@ app.get('/api/keygen', async (req, res) => {
     const cfg = loadConfig();
     cfg.privateKey = keys.privateKey;
     cfg.publicKey = keys.publicKey;
+    cfg.presharedKey = keys.presharedKey || '';
     saveConfig(cfg);
-    res.json({ publicKey: keys.publicKey });
+    audit.log({ action: 'keygen', ip: req.ip, publicKeyFingerprint: keyFingerprint(keys.publicKey) });
+    res.json({ publicKey: keys.publicKey, publicKeyFingerprint: keyFingerprint(keys.publicKey) });
   } catch (err) {
     res.status(503).json({ error: 'WireGuard no disponible: ' + err.message });
   }
@@ -638,6 +903,55 @@ app.get('/api/status', async (req, res) => {
   }
 });
 
+app.get('/api/health', (req, res) => {
+  if (!fs.existsSync(HEALTH_FILE)) return res.json({});
+  try {
+    return res.json(JSON.parse(fs.readFileSync(HEALTH_FILE, 'utf8')));
+  } catch {
+    return res.json({});
+  }
+});
+
+app.post('/api/backup', (req, res) => {
+  const passphrase = String(req.body?.passphrase || '');
+  const includeAudit = req.body?.includeAudit !== false;
+  if (passphrase.length < 12) {
+    return res.status(400).json({ error: 'passphrase demasiado corta' });
+  }
+  try {
+    const payload = buildBackupPayload(passphrase, includeAudit);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="miniweed-backup-${Date.now()}.bak"`);
+    audit.log({ action: 'backup.create', ip: req.ip, includeAudit: Boolean(includeAudit) });
+    return res.send(payload);
+  } catch (err) {
+    return res.status(500).json({ error: `backup failed: ${err.message}` });
+  }
+});
+
+app.post('/api/restore', express.raw({ type: 'application/octet-stream', limit: '15mb' }), (req, res) => {
+  const passphrase = req.get('x-backup-passphrase') || '';
+  if (!passphrase || passphrase.length < 12) {
+    return res.status(400).json({ error: 'passphrase inválida' });
+  }
+  try {
+    const entries = restoreBackupPayload(Buffer.from(req.body), passphrase);
+    const meta = entries['meta.json'] ? JSON.parse(entries['meta.json']) : null;
+    if (!meta || meta.version !== 1) {
+      return res.status(400).json({ error: 'meta inválida en backup' });
+    }
+    if (entries['config.json']) fs.writeFileSync(CONFIG_FILE, entries['config.json'], { mode: 0o600 });
+    if (entries['known_hosts.json']) fs.writeFileSync(KNOWN_HOSTS_FILE, entries['known_hosts.json'], { mode: 0o600 });
+    if (entries['audit.log']) fs.writeFileSync(path.join(DATA_DIR, 'audit.log'), entries['audit.log'], { mode: 0o600 });
+    migrateConfigIfNeeded();
+    refreshHealthSnapshot();
+    audit.log({ action: 'backup.restore', ip: req.ip });
+    return res.json({ ok: true, restored: Object.keys(entries) });
+  } catch (err) {
+    return res.status(400).json({ error: `restore failed: ${err.message}` });
+  }
+});
+
 app.get('/api/vps-setup-script', (req, res) => {
   const cfg = loadConfig();
   if (!cfg.publicKey || !cfg.vpsIp) {
@@ -646,15 +960,31 @@ app.get('/api/vps-setup-script', (req, res) => {
   const script = generateVpsScript(cfg);
   const sha256 = crypto.createHash('sha256').update(script).digest('hex');
   if (req.query.format === 'plain') {
+    audit.log({ action: 'script.download', format: 'plain', ip: req.ip });
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="miniweed-tunnel-vps-setup.sh"');
     return res.send(script);
   }
+  audit.log({ action: 'script.download', format: 'json', ip: req.ip });
   return res.json({ script, sha256, filename: 'miniweed-tunnel-vps-setup.sh' });
+});
+
+app.get('/api/audit', (req, res) => {
+  const limitRaw = parseInt(req.query.limit, 10);
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 1000) : 100;
+  const entries = audit.readLatest(limit);
+  res.json({ entries, total: entries.length });
 });
 
 // ── boot ─────────────────────────────────────────────────────────────────────
 
 ensureDataDir();
+API_AUTH_TOKEN = loadOrCreateApiToken();
+migrateConfigIfNeeded();
+refreshHealthSnapshot();
+const healthTimer = setInterval(() => {
+  refreshHealthSnapshot();
+}, 5 * 60 * 1000);
+if (typeof healthTimer.unref === 'function') healthTimer.unref();
 const PORT = parseInt(process.env.PORT) || 3000;
 app.listen(PORT, () => console.log(`[web] Umbrel Tunnel UI en :${PORT}`));

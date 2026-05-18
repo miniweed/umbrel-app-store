@@ -4,7 +4,7 @@ name: Tunnel
 tagline: Expón tu servidor al mundo sin tocar el router
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.png
 category: networking
-version: "1.3.20"
+version: "1.4.0"
 port: 3016
 description: >-
   Conecta tu Umbrel a un VPS propio y expón servicios a internet sin abrir puertos
@@ -17,6 +17,6 @@ repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
 releaseNotes: >-
-  Fix de rotacion de claves WireGuard en deploy VPS: ahora reinicia wg-quick@wg0 si ya estaba activo y valida que la clave publica activa coincida con la nueva generada para sincronizar correctamente la UI.
+  Variante sin deploy SSH automatico: setup manual por script con SHA-256, cifrado de config en reposo, auth API obligatoria robusta, PSK WireGuard, audit log, health checks y backup/restore cifrado.
 dependencies: []
 defaultPassword: ""

@@ -3,3 +3,4 @@ node_modules/
 *.log
 *.log.gz
 Screenshot*
+.DS_Store

@@ -16,7 +16,7 @@ services:
       - DATA_DIR=/data
       - WG_API_HOST=wg
       - PORT=3016
-      - TUNNEL_API_TOKEN=${APP_SEED}
+      - APP_SEED=${APP_SEED}
 
   caddy:
     image: caddy:2.8-alpine@sha256:af32e97399febea808609119bb21544d0265c58a02836576e32a2d082c262c17
