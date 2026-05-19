@@ -16,6 +16,13 @@ import {
   triggerFailover
 } from './api.js';
 
+/** @typedef {import('../../api-spec/openapi').components['schemas']['ConfigResponse']} ConfigResponse */
+/** @typedef {import('../../api-spec/openapi').components['schemas']['ConfigUpdateRequest']} ConfigUpdateRequest */
+/** @typedef {import('../../api-spec/openapi').components['schemas']['StatusResponse']} StatusResponse */
+/** @typedef {import('../../api-spec/openapi').components['schemas']['VpsSetupScriptResponse']} VpsSetupScriptResponse */
+/** @typedef {import('../../api-spec/openapi').components['schemas']['AuthPubkeysResponse']} AuthPubkeysResponse */
+/** @typedef {import('../../api-spec/openapi').components['schemas']['AuthSessionsResponse']} AuthSessionsResponse */
+
 const TAB_ITEMS = [
   { key: 'dashboard', label: 'Panel' },
   { key: 'config', label: 'Configuracion' },
@@ -46,21 +53,30 @@ function formatHealth(health) {
   return { cls: 'error', text: 'Sin conexion' };
 }
 
+function normalizeFailoverPolicy(policy) {
+  const raw = policy && typeof policy === 'object' ? policy : {};
+  return {
+    activeFailuresRequired: Number.parseInt(raw.activeFailuresRequired, 10) || DEFAULT_FAILOVER_POLICY.activeFailuresRequired,
+    candidateSuccessesRequired: Number.parseInt(raw.candidateSuccessesRequired, 10) || DEFAULT_FAILOVER_POLICY.candidateSuccessesRequired,
+    cooldownMs: Number.parseInt(raw.cooldownMs, 10) || DEFAULT_FAILOVER_POLICY.cooldownMs
+  };
+}
+
+/**
+ * @param {Partial<ConfigResponse> | null | undefined} cfg
+ * @returns {ConfigResponse}
+ */
 function normalizeConfig(cfg) {
   const out = { ...(cfg || {}) };
   out.vpsTargets = Array.isArray(out.vpsTargets) ? out.vpsTargets : [];
   out.services = Array.isArray(out.services) ? out.services : [];
   out.serviceHealth = out.serviceHealth && typeof out.serviceHealth === 'object' ? out.serviceHealth : {};
-  const failoverPolicy = out.failoverPolicy && typeof out.failoverPolicy === 'object' ? out.failoverPolicy : {};
-  out.failoverPolicy = {
-    activeFailuresRequired: Number.parseInt(failoverPolicy.activeFailuresRequired, 10) || DEFAULT_FAILOVER_POLICY.activeFailuresRequired,
-    candidateSuccessesRequired: Number.parseInt(failoverPolicy.candidateSuccessesRequired, 10) || DEFAULT_FAILOVER_POLICY.candidateSuccessesRequired,
-    cooldownMs: Number.parseInt(failoverPolicy.cooldownMs, 10) || DEFAULT_FAILOVER_POLICY.cooldownMs
-  };
+  out.failoverPolicy = normalizeFailoverPolicy(out.failoverPolicy);
   out.activeVpsId = out.activeVpsId || out.vpsTargets[0]?.id || '';
-  return out;
+  return /** @type {ConfigResponse} */ (out);
 }
 
+/** @returns {ConfigResponse} */
 function initialState() {
   return {
     publicKey: '',
@@ -81,9 +97,9 @@ function initialState() {
 }
 
 export function App() {
-  const [tab, setTab] = useState('dashboard');
-  const [cfg, setCfg] = useState(initialState());
-  const [status, setStatus] = useState({ connected: false, raw: 'Cargando...' });
+  const [tab, setTab] = useState(/** @type {'dashboard' | 'config' | 'services' | 'vps'} */ ('dashboard'));
+  const [cfg, setCfg] = useState(/** @type {ConfigResponse} */ (initialState()));
+  const [status, setStatus] = useState(/** @type {StatusResponse} */ ({ connected: false, raw: 'Cargando...' }));
   const [message, setMessage] = useState({ text: '', kind: '' });
   const [loading, setLoading] = useState(false);
   const [authMsg, setAuthMsg] = useState('');
@@ -93,7 +109,7 @@ export function App() {
   const [pubkeys, setPubkeys] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [vpsScriptWithCrowdsec, setVpsScriptWithCrowdsec] = useState(false);
-  const [scriptMeta, setScriptMeta] = useState(null);
+  const [scriptMeta, setScriptMeta] = useState(/** @type {VpsSetupScriptResponse | null} */ (null));
   const [showLogin, setShowLogin] = useState(false);
   const [loginPassword, setLoginPassword] = useState('');
 
@@ -116,8 +132,8 @@ export function App() {
     setCfg(loaded);
 
     const [keysRes, sessionsRes] = await Promise.all([
-      getAuthPubkeys().catch(() => ({ pubkeys: [] })),
-      getAuthSessions().catch(() => ({ sessions: [] }))
+      getAuthPubkeys().catch(() => /** @type {AuthPubkeysResponse} */ ({ pubkeys: [] })),
+      getAuthSessions().catch(() => /** @type {AuthSessionsResponse} */ ({ sessions: [] }))
     ]);
     setPubkeys(Array.isArray(keysRes.pubkeys) ? keysRes.pubkeys : []);
     setSessions(Array.isArray(sessionsRes.sessions) ? sessionsRes.sessions : []);
@@ -252,36 +268,37 @@ export function App() {
         priority: 0
       });
     }
-    return values;
+    return /** @type {ConfigUpdateRequest['vpsTargets']} */ (values);
+  }
+
+  /** @returns {ConfigUpdateRequest} */
+  function buildConfigPayload() {
+    return {
+      vpsIp: (cfg.vpsIp || '').trim(),
+      vpsPort: Number.parseInt(cfg.vpsPort, 10) || 51820,
+      vpsPubKey: (cfg.vpsPubKey || '').trim(),
+      vpsTargets: collectTargets(),
+      activeVpsId: cfg.activeVpsId || '',
+      failoverPolicy: normalizeFailoverPolicy(cfg.failoverPolicy),
+      domain: (cfg.domain || '').trim(),
+      acmeEmail: (cfg.acmeEmail || '').trim(),
+      privateKey: '••••',
+      services: (cfg.services || [])
+        .map(item => ({
+          name: (item.name || '').trim(),
+          subdomain: (item.subdomain || '').trim().toLowerCase(),
+          target: (item.target || '').trim(),
+          enabled: Boolean(item.enabled)
+        }))
+        .filter(item => item.subdomain || item.target)
+    };
   }
 
   async function onSaveConfig() {
     setLoading(true);
     setMessage({ text: '', kind: '' });
     try {
-      const payload = {
-        vpsIp: (cfg.vpsIp || '').trim(),
-        vpsPort: Number.parseInt(cfg.vpsPort, 10) || 51820,
-        vpsPubKey: (cfg.vpsPubKey || '').trim(),
-        vpsTargets: collectTargets(),
-        activeVpsId: cfg.activeVpsId || '',
-        failoverPolicy: {
-          activeFailuresRequired: Number.parseInt(cfg.failoverPolicy?.activeFailuresRequired, 10) || DEFAULT_FAILOVER_POLICY.activeFailuresRequired,
-          candidateSuccessesRequired: Number.parseInt(cfg.failoverPolicy?.candidateSuccessesRequired, 10) || DEFAULT_FAILOVER_POLICY.candidateSuccessesRequired,
-          cooldownMs: Number.parseInt(cfg.failoverPolicy?.cooldownMs, 10) || DEFAULT_FAILOVER_POLICY.cooldownMs
-        },
-        domain: (cfg.domain || '').trim(),
-        acmeEmail: (cfg.acmeEmail || '').trim(),
-        privateKey: '••••',
-        services: (cfg.services || [])
-          .map(item => ({
-            name: (item.name || '').trim(),
-            subdomain: (item.subdomain || '').trim().toLowerCase(),
-            target: (item.target || '').trim(),
-            enabled: Boolean(item.enabled)
-          }))
-          .filter(item => item.subdomain || item.target)
-      };
+      const payload = buildConfigPayload();
       await saveConfig(payload);
       await refreshConfigAndRelated();
       if (tab === 'vps') await loadVpsScript();
