@@ -303,6 +303,21 @@ label {
   padding-bottom: 6px;
 }
 
+.service-link-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.duplicate-badge {
+  font-size: 0.75rem;
+  color: var(--danger);
+  border: 1px solid #efcccc;
+  background: #fff1f1;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
 .list-row {
   display: flex;
   justify-content: space-between;
@@ -329,6 +344,11 @@ label {
 
   .service-link-row,
   .list-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .service-link-meta {
     flex-direction: column;
     align-items: flex-start;
   }

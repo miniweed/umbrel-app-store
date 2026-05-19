@@ -57,6 +57,7 @@ function initialState() {
     vpsPort: 51820,
     vpsPubKey: '',
     vpsPubKeyFingerprint: '',
+    vpsFingerprints: {},
     vpsTargets: [],
     activeVpsId: '',
     domain: '',
@@ -309,7 +310,6 @@ export function App() {
       await logout();
       setAuthMsg('Sesion cerrada.');
       setShowLogin(true);
-      await refreshConfigAndRelated();
     } catch (err) {
       setAuthMsg(err.message || 'No se pudo cerrar sesion.');
     }
@@ -387,7 +387,20 @@ export function App() {
     const script = scriptMeta?.script || '';
     if (!script) return;
     try {
-      await navigator.clipboard.writeText(script);
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(script);
+      } else {
+        const area = document.createElement('textarea');
+        area.value = script;
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.focus();
+        area.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(area);
+        if (!ok) throw new Error('copy failed');
+      }
       setMessage({ text: 'Script copiado al portapapeles.', kind: 'success' });
     } catch {
       setMessage({ text: 'No se pudo copiar automaticamente.', kind: 'error' });
@@ -411,6 +424,7 @@ export function App() {
   function renderDashboard() {
     const enabled = (cfg.services || []).filter(s => s.enabled && s.target);
     const showServices = Boolean(cfg.domain && enabled.length);
+    const seenHosts = new Set();
     return (
       <>
         {setupIncomplete ? (
@@ -426,10 +440,16 @@ export function App() {
             <div className="service-links">
               {enabled.map(svc => {
                 const host = svc.subdomain ? `${svc.subdomain}.${cfg.domain}` : cfg.domain;
+                const lower = host.toLowerCase();
+                const duplicated = seenHosts.has(lower);
+                seenHosts.add(lower);
                 return (
                   <div key={`${svc.subdomain}-${svc.target}`} className="service-link-row">
                     <span className="muted">{svc.name || svc.target}</span>
-                    <code>{`https://${host}`}</code>
+                    <div className="service-link-meta">
+                      <code>{`https://${host}`}</code>
+                      {duplicated ? <span className="duplicate-badge">host duplicado</span> : null}
+                    </div>
                   </div>
                 );
               })}
@@ -492,6 +512,7 @@ export function App() {
                   <button className="btn btn-danger" onClick={() => removeTarget(i)}>Eliminar</button>
                 </div>
                 <input value={t.pubKey || ''} onInput={e => setTarget(i, 'pubKey', e.currentTarget.value)} placeholder="Clave publica VPS" />
+                {cfg.vpsFingerprints?.[t.id] ? <p className="muted">Huella: {cfg.vpsFingerprints[t.id]}</p> : null}
               </div>
             ))}
           </div>
@@ -522,6 +543,10 @@ export function App() {
           <input value={pubkeyValue} onInput={e => setPubkeyValue(e.currentTarget.value)} placeholder="Clave publica base64" />
           <div className="actions-row">
             <button className="btn" onClick={onAddPubkey}>Anadir clave publica</button>
+            <button className="btn" onClick={async () => {
+              const out = await getAuthPubkeys().catch(() => ({ pubkeys: [] }));
+              setPubkeys(out.pubkeys || []);
+            }}>Refrescar claves</button>
           </div>
           <div className="list-box">
             {pubkeys.length === 0 ? <p className="muted">Sin claves registradas</p> : null}
@@ -541,6 +566,13 @@ export function App() {
                 <button className="btn btn-danger" onClick={() => onRevokeSession(s.id)}>Revocar</button>
               </div>
             ))}
+          </div>
+
+          <div className="actions-row">
+            <button className="btn" onClick={async () => {
+              const out = await getAuthSessions().catch(() => ({ sessions: [] }));
+              setSessions(out.sessions || []);
+            }}>Refrescar sesiones</button>
           </div>
 
           {authMsg ? <p className="muted">{authMsg}</p> : null}
