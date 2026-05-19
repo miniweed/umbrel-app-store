@@ -620,7 +620,7 @@ export function App() {
             {(cfg.services || []).map((svc, idx) => {
               const h = formatHealth(cfg.serviceHealth?.[serviceKey(svc)] || null);
               return (
-                <div key={`${idx}-${svc.subdomain}-${svc.target}`} className="service-card">
+                <div key={idx} className="service-card">
                   <input value={svc.name || ''} onInput={e => setService(idx, 'name', e.currentTarget.value)} placeholder="Nombre" />
                   <input value={svc.subdomain || ''} onInput={e => setService(idx, 'subdomain', e.currentTarget.value)} placeholder="Subdominio" />
                   <input value={svc.target || ''} onInput={e => setService(idx, 'target', e.currentTarget.value)} placeholder="http://IP:puerto" />
