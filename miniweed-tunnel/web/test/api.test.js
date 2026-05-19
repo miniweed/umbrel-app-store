@@ -10,7 +10,54 @@ jest.mock('dns', () => ({
   }
 }));
 
+jest.mock('net', () => {
+  const { EventEmitter } = require('events');
+  class MockSocket extends EventEmitter {
+    setTimeout() {
+      return this;
+    }
+
+    connect(port, hostname) {
+      const key = `${hostname}:${port}`;
+      const mock = global.__NET_SOCKET_MOCK__ || {};
+      const seq = mock.sequence && mock.sequence[key];
+      let outcome = null;
+      if (Array.isArray(seq) && seq.length > 0) {
+        outcome = seq.shift();
+      }
+      if (!outcome && mock.rules) {
+        outcome = mock.rules[key] || mock.rules[hostname] || null;
+      }
+      if (!outcome) outcome = 'fail';
+
+      setImmediate(() => {
+        if (outcome === 'ok') {
+          this.emit('connect');
+          return;
+        }
+        if (outcome === 'timeout') {
+          this.emit('timeout');
+          return;
+        }
+        this.emit('error', new Error(`mock-${outcome}`));
+      });
+
+      return this;
+    }
+
+    destroy() {
+      return this;
+    }
+  }
+
+  return { Socket: MockSocket };
+});
+
 const dns = require('dns');
+
+function setNetMock(rules = {}, sequence = {}) {
+  global.__NET_SOCKET_MOCK__ = { rules: { ...rules }, sequence: { ...sequence } };
+}
 
 async function startAppServer(tempDir) {
   process.env.DATA_DIR = tempDir;
@@ -63,6 +110,7 @@ describe('api hardening', () => {
   let logSpy;
 
   beforeEach(async () => {
+    setNetMock();
     logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'miniweed-web-'));
     const started = await startAppServer(tmpDir);
@@ -245,6 +293,204 @@ describe('api hardening', () => {
     expect(body.withCrowdsec).toBe(true);
     expect(body.script).toContain('Instalando CrowdSec');
     expect(body.vps.id).toBe('vps-c');
+  });
+
+  test('auto failover respects streaks, cooldown, and recovery after cooldown', async () => {
+    const nowSpy = jest.spyOn(Date, 'now');
+    let now = 1_000_000;
+    nowSpy.mockImplementation(() => now);
+
+    // Keep everyone healthy during initial save/health refresh.
+    setNetMock(
+      {
+        '10.0.0.1:22': 'ok',
+        '10.0.0.1:443': 'ok',
+        '10.0.0.2:22': 'ok',
+        '10.0.0.2:443': 'ok'
+      }
+    );
+
+    const payload = JSON.stringify({
+      vpsTargets: [
+        {
+          id: 'vps-a',
+          name: 'VPS A',
+          ip: '10.0.0.1',
+          port: 51820,
+          pubKey: 'A'.repeat(43) + '=',
+          enabled: true,
+          priority: 0
+        },
+        {
+          id: 'vps-b',
+          name: 'VPS B',
+          ip: '10.0.0.2',
+          port: 51820,
+          pubKey: 'B'.repeat(43) + '=',
+          enabled: true,
+          priority: 1
+        }
+      ],
+      activeVpsId: 'vps-a',
+      domain: 'example.com',
+      acmeEmail: 'ops@example.com',
+      privateKey: 'C'.repeat(43) + '=',
+      publicKey: 'D'.repeat(43) + '=',
+      services: []
+    });
+    const saved = await req(port, 'POST', '/api/config', payload, {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(saved.status).toBe(200);
+
+    // Active starts failing, candidate remains healthy.
+    setNetMock(
+      {
+        '10.0.0.1:22': 'fail',
+        '10.0.0.1:443': 'fail',
+        '10.0.0.2:22': 'ok',
+        '10.0.0.2:443': 'ok'
+      }
+    );
+
+    let auto1 = await req(port, 'POST', '/api/vps/failover', JSON.stringify({}), {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(auto1.status).toBe(200);
+    expect(JSON.parse(auto1.body).switched).toBe(false);
+
+    now += 1000;
+    let auto2 = await req(port, 'POST', '/api/vps/failover', JSON.stringify({}), {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(auto2.status).toBe(200);
+    const switchedToB = JSON.parse(auto2.body);
+    expect(switchedToB.switched).toBe(true);
+    expect(switchedToB.activeVpsId).toBe('vps-b');
+
+    setNetMock(
+      {
+        '10.0.0.1:22': 'ok',
+        '10.0.0.1:443': 'ok',
+        '10.0.0.2:22': 'fail',
+        '10.0.0.2:443': 'fail'
+      }
+    );
+
+    now += 1000;
+    await req(port, 'POST', '/api/vps/failover', JSON.stringify({}), {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+
+    now += 1000;
+    const cooldownBlocked = await req(port, 'POST', '/api/vps/failover', JSON.stringify({}), {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(cooldownBlocked.status).toBe(200);
+    const blockedBody = JSON.parse(cooldownBlocked.body);
+    expect(blockedBody.switched).toBe(false);
+    expect(blockedBody.activeVpsId).toBe('vps-b');
+
+    now += (2 * 60 * 1000) + 1000;
+    const recovered = await req(port, 'POST', '/api/vps/failover', JSON.stringify({}), {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(recovered.status).toBe(200);
+    const recoveredBody = JSON.parse(recovered.body);
+    expect(recoveredBody.switched).toBe(true);
+    expect(recoveredBody.activeVpsId).toBe('vps-a');
+
+    nowSpy.mockRestore();
+  });
+
+  test('auto failover tie-break uses lexical name when priorities equal', async () => {
+    // Keep everyone healthy during initial save/health refresh.
+    setNetMock(
+      {
+        '10.1.0.1:22': 'ok',
+        '10.1.0.1:443': 'ok',
+        '10.1.0.2:22': 'ok',
+        '10.1.0.2:443': 'ok',
+        '10.1.0.3:22': 'ok',
+        '10.1.0.3:443': 'ok'
+      }
+    );
+
+    const payload = JSON.stringify({
+      vpsTargets: [
+        {
+          id: 'active',
+          name: 'Active-Z',
+          ip: '10.1.0.1',
+          port: 51820,
+          pubKey: 'A'.repeat(43) + '=',
+          enabled: true,
+          priority: 5
+        },
+        {
+          id: 'alpha',
+          name: 'Alpha',
+          ip: '10.1.0.2',
+          port: 51820,
+          pubKey: 'B'.repeat(43) + '=',
+          enabled: true,
+          priority: 1
+        },
+        {
+          id: 'beta',
+          name: 'Beta',
+          ip: '10.1.0.3',
+          port: 51820,
+          pubKey: 'C'.repeat(43) + '=',
+          enabled: true,
+          priority: 1
+        }
+      ],
+      activeVpsId: 'active',
+      domain: 'example.com',
+      acmeEmail: 'ops@example.com',
+      privateKey: 'D'.repeat(43) + '=',
+      publicKey: 'E'.repeat(43) + '=',
+      services: []
+    });
+    const saved = await req(port, 'POST', '/api/config', payload, {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(saved.status).toBe(200);
+
+    // Active degrades, both candidates healthy with same priority.
+    setNetMock(
+      {
+        '10.1.0.1:22': 'fail',
+        '10.1.0.1:443': 'fail',
+        '10.1.0.2:22': 'ok',
+        '10.1.0.2:443': 'ok',
+        '10.1.0.3:22': 'ok',
+        '10.1.0.3:443': 'ok'
+      }
+    );
+
+    await req(port, 'POST', '/api/vps/failover', JSON.stringify({}), {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+
+    const auto = await req(port, 'POST', '/api/vps/failover', JSON.stringify({}), {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(auto.status).toBe(200);
+    const body = JSON.parse(auto.body);
+    expect(body.switched).toBe(true);
+    expect(body.activeVpsId).toBe('alpha');
+    expect(body.next.name).toBe('Alpha');
   });
 
   test('health refresh endpoint works', async () => {
