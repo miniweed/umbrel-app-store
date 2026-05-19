@@ -7,7 +7,13 @@ const net = require('net');
 const zlib = require('zlib');
 const crypto = require('crypto');
 const dns = require('dns');
-const { ConfigSchema, RotatePrepareSchema, RotateConfirmSchema } = require('./api-spec/schemas');
+const {
+  ConfigSchema,
+  AuthPasswordSchema,
+  AuthLoginSchema,
+  RotatePrepareSchema,
+  RotateConfirmSchema
+} = require('./api-spec/schemas');
 const { seal, open, isSealed } = require('./lib/cryptobox');
 const audit = require('./lib/audit');
 
@@ -19,9 +25,11 @@ let API_AUTH_TOKEN = '';
 let configLock = Promise.resolve();
 const MAX_SERVICES = 64;
 const MAX_VPS_TARGETS = 8;
-const FAILOVER_ACTIVE_FAILURES_REQUIRED = 2;
-const FAILOVER_CANDIDATE_SUCCESSES_REQUIRED = 2;
-const FAILOVER_COOLDOWN_MS = 2 * 60 * 1000;
+const FAILOVER_POLICY_DEFAULTS = {
+  activeFailuresRequired: 2,
+  candidateSuccessesRequired: 2,
+  cooldownMs: 2 * 60 * 1000
+};
 
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const WG_CONF = path.join(DATA_DIR, 'wg0.conf');
@@ -60,13 +68,24 @@ const DEFAULT_CONFIG = {
     passwordHash: '',
     sessions: [],
     pubkeys: []
-  }
+  },
+  failoverPolicy: { ...FAILOVER_POLICY_DEFAULTS }
 };
 
 const DEFAULT_CADDYFILE = ':80 {\n  respond "Umbrel Tunnel — not configured yet"\n}\n';
 
 app.use(express.json({ limit: '32kb' }));
 app.disable('x-powered-by');
+
+function cspHeaderForPath(pathname) {
+  const path = String(pathname || '');
+  const isLegacy = path === '/legacy' || path.startsWith('/legacy/');
+  if (isLegacy) {
+    return "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'";
+  }
+  return "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'";
+}
+
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
@@ -76,10 +95,7 @@ app.use((req, res, next) => {
   if (isHttps) {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   }
-  res.setHeader(
-    'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
-  );
+  res.setHeader('Content-Security-Policy', cspHeaderForPath(req.path));
   next();
 });
 
@@ -414,6 +430,17 @@ function encryptConfig(cfg) {
       target: svc.target && !isSealed(svc.target) ? seal(svc.target) : svc.target
     }));
   }
+
+  const auth = out.auth && typeof out.auth === 'object' ? { ...out.auth } : {};
+  if (auth.passwordHash && !isSealed(auth.passwordHash)) {
+    auth.passwordHash = seal(auth.passwordHash);
+  }
+  if (Array.isArray(auth.sessions) && !isSealed(auth.sessions)) {
+    auth.sessions = seal(JSON.stringify(auth.sessions));
+  }
+  out.auth = auth;
+
+  out.failoverPolicy = normalizeFailoverPolicy(out.failoverPolicy);
   return out;
 }
 
@@ -428,7 +455,56 @@ function decryptConfig(cfg) {
       target: isSealed(svc.target) ? open(svc.target) : svc.target
     }));
   }
+
+  const auth = out.auth && typeof out.auth === 'object' ? { ...out.auth } : {};
+  if (isSealed(auth.passwordHash)) {
+    auth.passwordHash = open(auth.passwordHash) || '';
+  }
+  if (isSealed(auth.sessions)) {
+    try {
+      const dec = open(auth.sessions);
+      const parsed = dec ? JSON.parse(dec) : [];
+      auth.sessions = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      auth.sessions = [];
+    }
+  }
+  out.auth = auth;
+
   return out;
+}
+
+function normalizeFailoverPolicy(input) {
+  const policy = input && typeof input === 'object' ? input : {};
+  const activeRaw = parseInt(policy.activeFailuresRequired, 10);
+  const candidateRaw = parseInt(policy.candidateSuccessesRequired, 10);
+  const cooldownRaw = parseInt(policy.cooldownMs, 10);
+  return {
+    activeFailuresRequired: Number.isFinite(activeRaw) && activeRaw >= 1 && activeRaw <= 10
+      ? activeRaw
+      : FAILOVER_POLICY_DEFAULTS.activeFailuresRequired,
+    candidateSuccessesRequired: Number.isFinite(candidateRaw) && candidateRaw >= 1 && candidateRaw <= 10
+      ? candidateRaw
+      : FAILOVER_POLICY_DEFAULTS.candidateSuccessesRequired,
+    cooldownMs: Number.isFinite(cooldownRaw) && cooldownRaw >= 0 && cooldownRaw <= 3_600_000
+      ? cooldownRaw
+      : FAILOVER_POLICY_DEFAULTS.cooldownMs
+  };
+}
+
+function extractFailoverPolicy(cfg) {
+  return normalizeFailoverPolicy(cfg?.failoverPolicy);
+}
+
+function openApiFailoverPolicySchema() {
+  return {
+    type: 'object',
+    properties: {
+      activeFailuresRequired: { type: 'integer', minimum: 1, maximum: 10 },
+      candidateSuccessesRequired: { type: 'integer', minimum: 1, maximum: 10 },
+      cooldownMs: { type: 'integer', minimum: 0, maximum: 3600000 }
+    }
+  };
 }
 
 function migrateConfigIfNeeded() {
@@ -505,10 +581,17 @@ function loadConfig() {
     const raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
     const dec = decryptConfig(raw);
     const cfg = { ...DEFAULT_CONFIG, ...dec };
+    cfg.auth = {
+      ...DEFAULT_CONFIG.auth,
+      ...(cfg.auth || {}),
+      sessions: Array.isArray(cfg.auth?.sessions) ? cfg.auth.sessions : []
+    };
+    cfg.failoverPolicy = normalizeFailoverPolicy(cfg.failoverPolicy);
     ensureVpsTargets(cfg);
     return cfg;
   } catch {
     const cfg = { ...DEFAULT_CONFIG };
+    cfg.failoverPolicy = normalizeFailoverPolicy(cfg.failoverPolicy);
     ensureVpsTargets(cfg);
     return cfg;
   }
@@ -793,23 +876,23 @@ async function computeVpsHealth(targets) {
   return out;
 }
 
-function pickBestFailoverTarget(cfg, vpsHealth) {
+function pickBestFailoverTarget(cfg, vpsHealth, policy) {
   ensureVpsTargets(cfg);
   const candidates = (cfg.vpsTargets || []).filter(t => t.enabled && t.ip && t.pubKey);
   if (!candidates.length) return null;
   const activeId = cfg.activeVpsId;
   const activeHealth = activeId ? vpsHealth[activeId] : null;
   const activeState = activeId ? getVpsProbeState(activeId) : { failStreak: 0 };
-  const activeDegraded = Boolean(activeHealth && !activeHealth.ok && activeState.failStreak >= FAILOVER_ACTIVE_FAILURES_REQUIRED);
+  const activeDegraded = Boolean(activeHealth && !activeHealth.ok && activeState.failStreak >= policy.activeFailuresRequired);
   if (!activeDegraded) return null;
 
-  if (Date.now() - failoverLastSwitchAt < FAILOVER_COOLDOWN_MS) return null;
+  if (Date.now() - failoverLastSwitchAt < policy.cooldownMs) return null;
 
   const healthy = candidates
     .filter(t => {
       const health = vpsHealth[t.id];
       const state = getVpsProbeState(t.id);
-      return Boolean(health?.ok && state.okStreak >= FAILOVER_CANDIDATE_SUCCESSES_REQUIRED);
+      return Boolean(health?.ok && state.okStreak >= policy.candidateSuccessesRequired);
     })
     .sort((a, b) => (a.priority - b.priority) || a.name.localeCompare(b.name));
   if (!healthy.length) return null;
@@ -819,8 +902,9 @@ function pickBestFailoverTarget(cfg, vpsHealth) {
 }
 
 async function maybeFailover(cfg, reason = 'auto') {
+  const policy = extractFailoverPolicy(cfg);
   const vpsHealth = await computeVpsHealth(cfg.vpsTargets || []);
-  const next = pickBestFailoverTarget(cfg, vpsHealth);
+  const next = pickBestFailoverTarget(cfg, vpsHealth, policy);
   let switched = false;
 
   if (next) {
@@ -839,7 +923,12 @@ async function maybeFailover(cfg, reason = 'auto') {
     });
   }
 
-  return { switched, next: next ? { id: next.id, name: next.name, ip: next.ip } : null, vpsHealth };
+  return {
+    switched,
+    next: next ? { id: next.id, name: next.name, ip: next.ip } : null,
+    vpsHealth,
+    policy
+  };
 }
 
 async function checkServicesHealth(services) {
@@ -1431,6 +1520,7 @@ function wgApi(urlPath) {
 app.get('/api/config', (req, res) => {
   const cfg = loadConfig();
   const active = getActiveVpsTarget(cfg);
+  const failoverPolicy = extractFailoverPolicy(cfg);
   // Never expose private key to the frontend
   const auth = cfg.auth || { passwordHash: '', sessions: [] };
   res.json({
@@ -1440,6 +1530,7 @@ app.get('/api/config', (req, res) => {
     vpsPubKey: active?.pubKey || '',
     vpsTargets: cfg.vpsTargets || [],
     activeVpsId: cfg.activeVpsId || '',
+    failoverPolicy,
     auth: {
       passwordEnabled: Boolean(auth.passwordHash),
       sessionCount: Array.isArray(auth.sessions) ? auth.sessions.length : 0
@@ -1478,6 +1569,9 @@ app.post('/api/config', validateBody(ConfigSchema.partial().passthrough()), asyn
       }
       if (typeof update.activeVpsId === 'string') {
         cfg.activeVpsId = update.activeVpsId.trim();
+      }
+      if (update.failoverPolicy && typeof update.failoverPolicy === 'object') {
+        cfg.failoverPolicy = normalizeFailoverPolicy(update.failoverPolicy);
       }
       ensureVpsTargets(cfg);
       cfg.services = Array.isArray(cfg.services)
@@ -1520,11 +1614,8 @@ app.post('/api/config', validateBody(ConfigSchema.partial().passthrough()), asyn
   }
 });
 
-app.post('/api/auth/password', async (req, res) => {
+app.post('/api/auth/password', validateBody(AuthPasswordSchema), async (req, res) => {
   const password = String(req.body?.password || '');
-  if (password.length < 12 || password.length > 256) {
-    return res.status(400).json({ error: 'password inválida' });
-  }
   await withConfigLock(async () => {
     const cfg = loadConfig();
     cfg.auth = cfg.auth || {};
@@ -1536,10 +1627,9 @@ app.post('/api/auth/password', async (req, res) => {
   return res.json({ ok: true });
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', validateBody(AuthLoginSchema), async (req, res) => {
   const password = String(req.body?.password || '');
   const ip = req.ip || req.socket?.remoteAddress || 'unknown';
-  if (!password) return res.status(400).json({ error: 'password requerida' });
 
   const cfg = loadConfig();
   const hash = cfg.auth?.passwordHash || '';
@@ -1786,11 +1876,7 @@ app.post('/api/vps/failover', async (req, res) => {
       ok: true,
       ...result,
       activeVpsId: loadConfig().activeVpsId || '',
-      policy: {
-        activeFailuresRequired: FAILOVER_ACTIVE_FAILURES_REQUIRED,
-        candidateSuccessesRequired: FAILOVER_CANDIDATE_SUCCESSES_REQUIRED,
-        cooldownMs: FAILOVER_COOLDOWN_MS
-      }
+      policy: result.policy || extractFailoverPolicy(cfg)
     });
   }
   const target = (cfg.vpsTargets || []).find(t => t.id === requestedId && t.enabled && t.ip && t.pubKey);
@@ -2031,12 +2117,7 @@ app.get('/api/openapi.json', (req, res) => {
             switched: { type: 'boolean' },
             activeVpsId: { type: 'string' },
             policy: {
-              type: 'object',
-              properties: {
-                activeFailuresRequired: { type: 'integer' },
-                candidateSuccessesRequired: { type: 'integer' },
-                cooldownMs: { type: 'integer' }
-              }
+              ...openApiFailoverPolicySchema()
             },
             next: {
               type: 'object',
@@ -2088,6 +2169,7 @@ app.get('/api/openapi.json', (req, res) => {
             activeVpsId: { type: 'string' },
             domain: { type: 'string' },
             acmeEmail: { type: 'string', format: 'email' },
+            failoverPolicy: openApiFailoverPolicySchema(),
             privateKey: { type: 'string' },
             services: {
               type: 'array',
@@ -2119,6 +2201,7 @@ app.get('/api/openapi.json', (req, res) => {
             activeVpsId: { type: 'string' },
             domain: { type: 'string' },
             acmeEmail: { type: 'string' },
+            failoverPolicy: openApiFailoverPolicySchema(),
             vpsTargets: {
               type: 'array',
               items: { $ref: '#/components/schemas/VpsTarget' }

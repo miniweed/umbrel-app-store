@@ -267,13 +267,19 @@
             "type": "object",
             "properties": {
               "activeFailuresRequired": {
-                "type": "integer"
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
               },
               "candidateSuccessesRequired": {
-                "type": "integer"
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
               },
               "cooldownMs": {
-                "type": "integer"
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3600000
               }
             }
           },
@@ -385,6 +391,26 @@
             "type": "string",
             "format": "email"
           },
+          "failoverPolicy": {
+            "type": "object",
+            "properties": {
+              "activeFailuresRequired": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
+              },
+              "candidateSuccessesRequired": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
+              },
+              "cooldownMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3600000
+              }
+            }
+          },
           "privateKey": {
             "type": "string"
           },
@@ -446,6 +472,26 @@
           },
           "acmeEmail": {
             "type": "string"
+          },
+          "failoverPolicy": {
+            "type": "object",
+            "properties": {
+              "activeFailuresRequired": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
+              },
+              "candidateSuccessesRequired": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
+              },
+              "cooldownMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3600000
+              }
+            }
           },
           "vpsTargets": {
             "type": "array",

@@ -743,6 +743,115 @@ describe('api hardening', () => {
     expect(afterLogout.status).toBe(401);
   });
 
+  test('auth endpoints enforce zod validation', async () => {
+    const badSetPwd = await req(port, 'POST', '/api/auth/password', JSON.stringify({ password: 'short' }), {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(badSetPwd.status).toBe(400);
+    expect(JSON.parse(badSetPwd.body).error).toBe('validation');
+
+    const badLogin = await req(port, 'POST', '/api/auth/login', JSON.stringify({ password: '' }), {
+      'Content-Type': 'application/json'
+    });
+    expect(badLogin.status).toBe(400);
+    expect(JSON.parse(badLogin.body).error).toBe('validation');
+  });
+
+  test('stores auth secrets encrypted at rest', async () => {
+    const setPwd = await req(port, 'POST', '/api/auth/password', JSON.stringify({ password: 'S3gura__pass__123' }), {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(setPwd.status).toBe(200);
+
+    const login = await req(port, 'POST', '/api/auth/login', JSON.stringify({ password: 'S3gura__pass__123' }), {
+      'Content-Type': 'application/json'
+    });
+    expect(login.status).toBe(200);
+
+    const raw = JSON.parse(fs.readFileSync(path.join(tmpDir, 'config.json'), 'utf8'));
+    expect(raw.auth).toBeTruthy();
+    expect(raw.auth.passwordHash).toMatchObject({ v: 1 });
+    expect(raw.auth.sessions).toMatchObject({ v: 1 });
+  });
+
+  test('supports configurable failover policy via config', async () => {
+    const payload = JSON.stringify({
+      vpsTargets: [
+        {
+          id: 'vps-a',
+          name: 'VPS A',
+          ip: '10.4.0.1',
+          port: 51820,
+          pubKey: 'A'.repeat(43) + '=',
+          enabled: true,
+          priority: 0
+        },
+        {
+          id: 'vps-b',
+          name: 'VPS B',
+          ip: '10.4.0.2',
+          port: 51820,
+          pubKey: 'B'.repeat(43) + '=',
+          enabled: true,
+          priority: 1
+        }
+      ],
+      activeVpsId: 'vps-a',
+      domain: 'example.com',
+      acmeEmail: 'ops@example.com',
+      privateKey: 'C'.repeat(43) + '=',
+      publicKey: 'D'.repeat(43) + '=',
+      failoverPolicy: {
+        activeFailuresRequired: 1,
+        candidateSuccessesRequired: 1,
+        cooldownMs: 0
+      },
+      services: []
+    });
+    const saved = await req(port, 'POST', '/api/config', payload, {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(saved.status).toBe(200);
+
+    setNetMock(
+      {
+        '10.4.0.1:22': 'fail',
+        '10.4.0.1:443': 'fail',
+        '10.4.0.2:22': 'ok',
+        '10.4.0.2:443': 'ok'
+      }
+    );
+
+    const auto = await req(port, 'POST', '/api/vps/failover', JSON.stringify({}), {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(auto.status).toBe(200);
+    const body = JSON.parse(auto.body);
+    expect(body.switched).toBe(true);
+    expect(body.policy).toMatchObject({
+      activeFailuresRequired: 1,
+      candidateSuccessesRequired: 1,
+      cooldownMs: 0
+    });
+  });
+
+  test('applies strict CSP for SPA routes and compatibility CSP for legacy routes', async () => {
+    const appRes = await req(port, 'GET', '/app/index.html');
+    expect(appRes.status).toBe(200);
+    const appCsp = String(appRes.headers['content-security-policy'] || '');
+    expect(appCsp).toContain("script-src 'self'");
+    expect(appCsp).not.toContain("script-src 'self' 'unsafe-inline'");
+
+    const legacyRes = await req(port, 'GET', '/legacy');
+    expect(legacyRes.status).toBe(200);
+    const legacyCsp = String(legacyRes.headers['content-security-policy'] || '');
+    expect(legacyCsp).toContain("script-src 'self' 'unsafe-inline'");
+  });
+
   test('pubkey challenge verify flow creates CLI session', async () => {
     const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
     const publicDerB64 = publicKey.export({ format: 'der', type: 'spki' }).toString('base64');

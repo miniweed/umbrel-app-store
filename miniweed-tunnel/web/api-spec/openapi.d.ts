@@ -941,6 +941,11 @@ export interface components {
             domain?: string;
             /** Format: email */
             acmeEmail?: string;
+            failoverPolicy?: {
+                activeFailuresRequired?: number;
+                candidateSuccessesRequired?: number;
+                cooldownMs?: number;
+            };
             privateKey?: string;
             services?: ({
                 name?: string;
@@ -961,6 +966,11 @@ export interface components {
             activeVpsId: string;
             domain?: string;
             acmeEmail?: string;
+            failoverPolicy?: {
+                activeFailuresRequired?: number;
+                candidateSuccessesRequired?: number;
+                cooldownMs?: number;
+            };
             vpsTargets: components["schemas"]["VpsTarget"][];
             auth: {
                 passwordEnabled: boolean;
