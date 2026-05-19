@@ -4,7 +4,7 @@ name: Tunnel
 tagline: Expón tu servidor al mundo sin tocar el router
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.png
 category: networking
-version: "1.5.3"
+version: "1.5.4"
 port: 3016
 description: >-
   Conecta tu Umbrel a un VPS propio y expón servicios a internet sin abrir puertos
@@ -17,6 +17,6 @@ repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
 releaseNotes: >-
-  Hardening de arranque: el backend evita fallo fatal si no puede cargar token persistido y genera fallback seguro para arrancar, ademas del bootstrap de APP_SEED y fix de base /app/ en SPA. Mejora compatibilidad en instalaciones Umbrel con datos/variables incompletas.
+  Fix critico de empaquetado: la imagen web ahora incluye `api-spec/` (faltaba `schemas.js`), corrigiendo crash al arrancar en Umbrel (`Cannot find module './api-spec/schemas'`). Incluye hardening previo de boot y fixes SPA.
 dependencies: []
 defaultPassword: ""
