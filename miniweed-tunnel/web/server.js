@@ -469,8 +469,13 @@ function loadOrCreateApiToken() {
     }
   }
 
-  console.error('FATAL: APP_SEED/TUNNEL_API_TOKEN missing or too short, cannot initialize API token securely.');
-  process.exit(1);
+  const fallback = crypto.randomBytes(32).toString('base64url');
+  try {
+    fs.writeFileSync(TOKEN_FILE, JSON.stringify(seal(fallback)), { mode: 0o600 });
+  } catch (err) {
+    console.error(`[warn] could not persist API token: ${err.message}`);
+  }
+  return fallback;
 }
 
 function loadOrCreateAppSeed() {
@@ -487,7 +492,11 @@ function loadOrCreateAppSeed() {
   }
 
   const generated = crypto.randomBytes(48).toString('base64url');
-  fs.writeFileSync(APP_SEED_FILE, `${generated}\n`, { mode: 0o600 });
+  try {
+    fs.writeFileSync(APP_SEED_FILE, `${generated}\n`, { mode: 0o600 });
+  } catch (err) {
+    console.error(`[warn] could not persist app seed: ${err.message}`);
+  }
   return generated;
 }
 
