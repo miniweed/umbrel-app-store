@@ -4,7 +4,7 @@ name: Tunnel
 tagline: Expón tu servidor al mundo sin tocar el router
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.png
 category: networking
-version: "1.6.17"
+version: "1.6.18"
 port: 3016
 description: >-
   Conecta tu Umbrel a un VPS propio y expón servicios a internet sin abrir puertos
@@ -17,6 +17,6 @@ repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
 releaseNotes: >-
-  Hotfix de arranque: el servicio web ya no cae por errores de permisos en `/data/Caddyfile` y añade entrypoint robusto para preparar permisos de `/data` antes de iniciar como usuario no-root. Actualización de imagen `web` a `1.6.17`.
+  Hotfix de compatibilidad en Umbrel: se corrige el entrypoint del contenedor web para evitar fallos por `setgroups/chown` en entornos con privilegios restringidos, manteniendo ejecución no-root y arranque estable. Actualización de imagen `web` a `1.6.18`.
 dependencies: []
 defaultPassword: ""
