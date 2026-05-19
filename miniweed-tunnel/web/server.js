@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const https = require('https');
+const net = require('net');
 const zlib = require('zlib');
 const crypto = require('crypto');
 const dns = require('dns');
@@ -18,6 +19,9 @@ let API_AUTH_TOKEN = '';
 let configLock = Promise.resolve();
 const MAX_SERVICES = 64;
 const MAX_VPS_TARGETS = 8;
+const FAILOVER_ACTIVE_FAILURES_REQUIRED = 2;
+const FAILOVER_CANDIDATE_SUCCESSES_REQUIRED = 2;
+const FAILOVER_COOLDOWN_MS = 2 * 60 * 1000;
 
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const WG_CONF = path.join(DATA_DIR, 'wg0.conf');
@@ -33,6 +37,8 @@ const authChallenges = new Map();
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const rotationPlans = new Map();
 const ROTATION_PLAN_TTL_MS = 30 * 60 * 1000;
+const failoverState = new Map();
+let failoverLastSwitchAt = 0;
 
 const DEFAULT_CONFIG = {
   privateKey: '',
@@ -491,6 +497,19 @@ function getActiveVpsTarget(cfg) {
   return cfg.vpsTargets.find(t => t.id === cfg.activeVpsId) || null;
 }
 
+function recordVpsProbeResult(targetId, ok) {
+  const current = failoverState.get(targetId) || { okStreak: 0, failStreak: 0 };
+  const next = ok
+    ? { okStreak: current.okStreak + 1, failStreak: 0 }
+    : { okStreak: 0, failStreak: current.failStreak + 1 };
+  failoverState.set(targetId, next);
+  return next;
+}
+
+function getVpsProbeState(targetId) {
+  return failoverState.get(targetId) || { okStreak: 0, failStreak: 0 };
+}
+
 function isWireGuardKey(value) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9+/]{43}=$/.test(value)) return false;
   try {
@@ -618,38 +637,44 @@ function probeServiceTarget(target, timeoutMs = 4000) {
   });
 }
 
-function probeVpsTarget(target, timeoutMs = 1500) {
+function probeTcpPort(hostname, port, timeoutMs = 1500) {
   return new Promise(resolve => {
+    const started = Date.now();
+    const socket = new net.Socket();
+    let settled = false;
+    const done = (result) => {
+      if (settled) return;
+      settled = true;
+      try { socket.destroy(); } catch {}
+      resolve(result);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => {
+      done({ ok: true, latencyMs: Date.now() - started, message: `tcp:${port}` });
+    });
+    socket.once('timeout', () => done({ ok: false, message: `timeout tcp:${port}` }));
+    socket.once('error', err => done({ ok: false, message: err.message }));
     try {
-      if (!target || !target.ip) {
-        return resolve({ ok: false, message: 'sin ip' });
-      }
-      const started = Date.now();
-      const req = http.request(
-        {
-          protocol: 'http:',
-          hostname: target.ip,
-          port: 80,
-          path: '/',
-          method: 'GET',
-          timeout: timeoutMs
-        },
-        res => {
-          res.resume();
-          resolve({
-            ok: true,
-            message: `http ${res.statusCode || 0}`,
-            latencyMs: Date.now() - started
-          });
-        }
-      );
-      req.on('timeout', () => req.destroy(new Error('timeout')));
-      req.on('error', err => resolve({ ok: false, message: err.message }));
-      req.end();
+      socket.connect(port, hostname);
     } catch (err) {
-      resolve({ ok: false, message: err.message });
+      done({ ok: false, message: err.message });
     }
   });
+}
+
+async function probeVpsTarget(target, timeoutMs = 1500) {
+  if (!target || !target.ip) {
+    return { ok: false, message: 'sin ip' };
+  }
+  const wgProbe = await probeTcpPort(target.ip, 22, timeoutMs);
+  if (wgProbe.ok) {
+    return { ok: true, message: `ssh reachable (${wgProbe.message})`, latencyMs: wgProbe.latencyMs };
+  }
+  const webProbe = await probeTcpPort(target.ip, 443, timeoutMs);
+  if (webProbe.ok) {
+    return { ok: true, message: `https reachable (${webProbe.message})`, latencyMs: webProbe.latencyMs };
+  }
+  return { ok: false, message: `${wgProbe.message}; ${webProbe.message}` };
 }
 
 async function computeVpsHealth(targets) {
@@ -666,12 +691,15 @@ async function computeVpsHealth(targets) {
       return;
     }
     const probe = await probeVpsTarget(target);
+    const streak = recordVpsProbeResult(target.id, Boolean(probe.ok));
     out[target.id] = {
       ok: Boolean(probe.ok),
       checked: true,
       checkedAt: new Date().toISOString(),
       message: probe.message || (probe.ok ? 'ok' : 'sin respuesta'),
-      latencyMs: Number.isFinite(probe.latencyMs) ? probe.latencyMs : null
+      latencyMs: Number.isFinite(probe.latencyMs) ? probe.latencyMs : null,
+      okStreak: streak.okStreak,
+      failStreak: streak.failStreak
     };
   }));
   return out;
@@ -683,10 +711,18 @@ function pickBestFailoverTarget(cfg, vpsHealth) {
   if (!candidates.length) return null;
   const activeId = cfg.activeVpsId;
   const activeHealth = activeId ? vpsHealth[activeId] : null;
-  if (activeHealth?.ok) return null;
+  const activeState = activeId ? getVpsProbeState(activeId) : { failStreak: 0 };
+  const activeDegraded = Boolean(activeHealth && !activeHealth.ok && activeState.failStreak >= FAILOVER_ACTIVE_FAILURES_REQUIRED);
+  if (!activeDegraded) return null;
+
+  if (Date.now() - failoverLastSwitchAt < FAILOVER_COOLDOWN_MS) return null;
 
   const healthy = candidates
-    .filter(t => vpsHealth[t.id]?.ok)
+    .filter(t => {
+      const health = vpsHealth[t.id];
+      const state = getVpsProbeState(t.id);
+      return Boolean(health?.ok && state.okStreak >= FAILOVER_CANDIDATE_SUCCESSES_REQUIRED);
+    })
     .sort((a, b) => (a.priority - b.priority) || a.name.localeCompare(b.name));
   if (!healthy.length) return null;
   const next = healthy[0];
@@ -706,6 +742,7 @@ async function maybeFailover(cfg, reason = 'auto') {
     const wgConf = generateWgConf(cfg);
     if (wgConf) fs.writeFileSync(WG_CONF, wgConf);
     switched = true;
+    failoverLastSwitchAt = Date.now();
     audit.log({
       action: 'vps.failover',
       reason,
@@ -1156,6 +1193,7 @@ rollback
 }
 
 async function computeHealth(cfg) {
+  const active = getActiveVpsTarget(cfg);
   const services = cfg?.services || [];
   const out = {};
   await Promise.all(services.map(async svc => {
@@ -1169,7 +1207,7 @@ async function computeHealth(cfg) {
     if (dnsHost) {
       try {
         const addrs = await dns.promises.resolve4(dnsHost);
-        item.dns = { ok: addrs.includes(cfg.vpsIp), addrs };
+        item.dns = { ok: active?.ip ? addrs.includes(active.ip) : false, addrs, expected: active?.ip || '' };
       } catch (err) {
         item.dns = { ok: false, error: err.code || err.message };
       }
@@ -1639,7 +1677,16 @@ app.post('/api/vps/failover', async (req, res) => {
   ensureVpsTargets(cfg);
   if (!requestedId) {
     const result = await maybeFailover(cfg, 'manual-auto');
-    return res.json({ ok: true, ...result, activeVpsId: loadConfig().activeVpsId || '' });
+    return res.json({
+      ok: true,
+      ...result,
+      activeVpsId: loadConfig().activeVpsId || '',
+      policy: {
+        activeFailuresRequired: FAILOVER_ACTIVE_FAILURES_REQUIRED,
+        candidateSuccessesRequired: FAILOVER_CANDIDATE_SUCCESSES_REQUIRED,
+        cooldownMs: FAILOVER_COOLDOWN_MS
+      }
+    });
   }
   const target = (cfg.vpsTargets || []).find(t => t.id === requestedId && t.enabled && t.ip && t.pubKey);
   if (!target) {
@@ -1828,6 +1875,94 @@ app.get('/api/openapi.json', (req, res) => {
             filename: { type: 'string' }
           }
         },
+        VpsTarget: {
+          type: 'object',
+          required: ['id', 'name', 'ip', 'port', 'enabled', 'priority'],
+          properties: {
+            id: { type: 'string' },
+            name: { type: 'string' },
+            ip: { type: 'string' },
+            port: { type: 'integer', minimum: 1, maximum: 65535 },
+            pubKey: { type: 'string', pattern: '^[A-Za-z0-9+/]{43}=$' },
+            enabled: { type: 'boolean' },
+            priority: { type: 'integer', minimum: 0, maximum: 99 },
+            fingerprint: { type: 'string' },
+            health: {
+              type: 'object',
+              properties: {
+                ok: { type: 'boolean' },
+                checked: { type: 'boolean' },
+                checkedAt: { type: 'string' },
+                message: { type: 'string' },
+                latencyMs: { type: ['integer', 'null'] },
+                okStreak: { type: 'integer' },
+                failStreak: { type: 'integer' }
+              }
+            }
+          }
+        },
+        VpsTargetsResponse: {
+          type: 'object',
+          required: ['activeVpsId', 'targets'],
+          properties: {
+            activeVpsId: { type: 'string' },
+            targets: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/VpsTarget' }
+            }
+          }
+        },
+        VpsFailoverRequest: {
+          type: 'object',
+          properties: {
+            targetId: { type: 'string' }
+          }
+        },
+        VpsFailoverResponse: {
+          type: 'object',
+          required: ['ok', 'activeVpsId'],
+          properties: {
+            ok: { type: 'boolean' },
+            switched: { type: 'boolean' },
+            activeVpsId: { type: 'string' },
+            policy: {
+              type: 'object',
+              properties: {
+                activeFailuresRequired: { type: 'integer' },
+                candidateSuccessesRequired: { type: 'integer' },
+                cooldownMs: { type: 'integer' }
+              }
+            },
+            next: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                name: { type: 'string' },
+                ip: { type: 'string' }
+              }
+            }
+          }
+        },
+        VpsSetupScriptResponse: {
+          type: 'object',
+          required: ['script', 'sha256', 'filename', 'vps', 'withCrowdsec'],
+          properties: {
+            script: { type: 'string' },
+            sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+            filename: { type: 'string' },
+            withCrowdsec: { type: 'boolean' },
+            vps: {
+              type: 'object',
+              required: ['id', 'name', 'ip', 'port'],
+              properties: {
+                id: { type: 'string' },
+                name: { type: 'string' },
+                ip: { type: 'string' },
+                port: { type: 'integer' }
+              }
+            }
+          }
+        },
         AuditVerifyResponse: {
           type: 'object',
           required: ['ok', 'entries'],
@@ -1932,6 +2067,73 @@ app.get('/api/openapi.json', (req, res) => {
               content: {
                 'application/json': {
                   schema: { $ref: '#/components/schemas/KillSwitchScriptResponse' }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/vps/targets': {
+        get: {
+          summary: 'List VPS targets with health and active target',
+          responses: {
+            '200': {
+              description: 'VPS targets and current active target',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/VpsTargetsResponse' }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/vps/failover': {
+        post: {
+          summary: 'Trigger automatic failover or force specific target',
+          requestBody: {
+            required: false,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/VpsFailoverRequest' }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Failover result',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/VpsFailoverResponse' }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/vps-setup-script': {
+        get: {
+          summary: 'Generate setup script for selected VPS target',
+          parameters: [
+            {
+              in: 'query',
+              name: 'vpsId',
+              required: false,
+              schema: { type: 'string' }
+            },
+            {
+              in: 'query',
+              name: 'withCrowdsec',
+              required: false,
+              schema: { type: 'string', enum: ['1'] }
+            }
+          ],
+          responses: {
+            '200': {
+              description: 'Setup script payload with hash and selected VPS',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/VpsSetupScriptResponse' }
                 }
               }
             }

@@ -167,3 +167,17 @@ curl -sS -X POST "$API_URL/api/vps/failover" \
 curl -sS "$API_URL/api/vps-setup-script?vpsId=vps-b&withCrowdsec=1" \
   -H "x-tunnel-api-token: $API_TOKEN"
 ```
+
+## CrowdSec (sin API del proveedor)
+
+El soporte CrowdSec se hace 100% por script local en el VPS, sin integrar APIs del proveedor cloud.
+
+- Activación: `withCrowdsec=1` al pedir `vps-setup-script`.
+- Verificación smoke local: `miniweed-tunnel/vps-setup/crowdsec-smoke.sh`.
+- Recuperación ante lockout/bloqueos: `miniweed-tunnel/vps-setup/crowdsec-recovery.md`.
+
+Smoke check recomendado en VPS:
+
+```bash
+sudo bash miniweed-tunnel/vps-setup/crowdsec-smoke.sh
+```

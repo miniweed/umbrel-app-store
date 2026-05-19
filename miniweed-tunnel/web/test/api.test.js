@@ -160,6 +160,45 @@ describe('api hardening', () => {
     expect(cfgBody.vpsIp).toBe('11.11.11.11');
   });
 
+  test('returns vps targets with health metadata', async () => {
+    const payload = JSON.stringify({
+      vpsTargets: [
+        {
+          id: 'vps-h1',
+          name: 'VPS Health 1',
+          ip: '127.0.0.1',
+          port: 51820,
+          pubKey: 'A'.repeat(43) + '=',
+          enabled: true,
+          priority: 0
+        }
+      ],
+      activeVpsId: 'vps-h1',
+      domain: 'example.com',
+      acmeEmail: 'ops@example.com',
+      privateKey: 'A'.repeat(43) + '=',
+      publicKey: 'B'.repeat(43) + '=',
+      services: []
+    });
+    const saved = await req(port, 'POST', '/api/config', payload, {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(saved.status).toBe(200);
+
+    const r = await req(port, 'GET', '/api/vps/targets', null, {
+      'x-tunnel-api-token': token
+    });
+    expect(r.status).toBe(200);
+    const body = JSON.parse(r.body);
+    expect(body.activeVpsId).toBe('vps-h1');
+    expect(Array.isArray(body.targets)).toBe(true);
+    expect(body.targets[0].id).toBe('vps-h1');
+    expect(typeof body.targets[0].fingerprint).toBe('string');
+    expect(body.targets[0].health).toBeTruthy();
+    expect(typeof body.targets[0].health.ok).toBe('boolean');
+  });
+
   test('can request setup script with crowdsec for specific vps', async () => {
     const payload = JSON.stringify({
       vpsTargets: [
@@ -402,5 +441,9 @@ describe('api hardening', () => {
     expect(body.components.schemas.RotatePrepareRequest).toBeTruthy();
     expect(body.paths['/api/rotate/{planId}']).toBeTruthy();
     expect(body.paths['/api/audit/verify']).toBeTruthy();
+    expect(body.paths['/api/vps/failover']).toBeTruthy();
+    expect(body.paths['/api/vps/targets']).toBeTruthy();
+    expect(body.paths['/api/vps-setup-script']).toBeTruthy();
+    expect(body.components.schemas.VpsFailoverResponse).toBeTruthy();
   });
 });
