@@ -20,26 +20,16 @@ jobs:
       - name: Extract versions
         id: versions
         run: |
-          APP_VERSION=$(python3 - <<'PY'
-import re
-from pathlib import Path
-text = Path('miniweed-tunnel/umbrel-app.yml').read_text(encoding='utf-8')
-m = re.search(r'^version:\s*"([^"]+)"', text, re.M)
-if not m:
-    raise SystemExit('umbrel-app.yml version not found')
-print(m.group(1))
-PY
-)
-          WG_VERSION=$(python3 - <<'PY'
-import re
-from pathlib import Path
-text = Path('miniweed-tunnel/docker-compose.yml').read_text(encoding='utf-8')
-m = re.search(r'umbrel-tunnel-wg:([^@\s]+)', text)
-if not m:
-    raise SystemExit('wg image version not found in docker-compose.yml')
-print(m.group(1))
-PY
-)
+          APP_VERSION=$(sed -n 's/^version: "\([^"]*\)"/\1/p' miniweed-tunnel/umbrel-app.yml | head -n1)
+          WG_VERSION=$(sed -n 's/.*umbrel-tunnel-wg:\([^@ ]*\).*/\1/p' miniweed-tunnel/docker-compose.yml | head -n1)
+          if [ -z "$APP_VERSION" ]; then
+            echo "umbrel-app.yml version not found" >&2
+            exit 1
+          fi
+          if [ -z "$WG_VERSION" ]; then
+            echo "wg image version not found in docker-compose.yml" >&2
+            exit 1
+          fi
           echo "app_version=${APP_VERSION}" >> "$GITHUB_OUTPUT"
           echo "wg_version=${WG_VERSION}" >> "$GITHUB_OUTPUT"
 
