@@ -860,17 +860,12 @@ describe('api hardening', () => {
     });
   });
 
-  test('applies strict CSP for SPA routes and compatibility CSP for legacy routes', async () => {
+  test('applies strict CSP for SPA routes', async () => {
     const appRes = await req(port, 'GET', '/app/index.html');
     expect(appRes.status).toBe(200);
     const appCsp = String(appRes.headers['content-security-policy'] || '');
     expect(appCsp).toContain("script-src 'self'");
     expect(appCsp).not.toContain("script-src 'self' 'unsafe-inline'");
-
-    const legacyRes = await req(port, 'GET', '/legacy');
-    expect(legacyRes.status).toBe(200);
-    const legacyCsp = String(legacyRes.headers['content-security-policy'] || '');
-    expect(legacyCsp).toContain("script-src 'self' 'unsafe-inline'");
   });
 
   test('pubkey challenge verify flow creates CLI session', async () => {

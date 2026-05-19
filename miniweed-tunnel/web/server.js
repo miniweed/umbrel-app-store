@@ -78,11 +78,6 @@ app.use(express.json({ limit: '32kb' }));
 app.disable('x-powered-by');
 
 function cspHeaderForPath(pathname) {
-  const path = String(pathname || '');
-  const isLegacy = path === '/legacy' || path.startsWith('/legacy/');
-  if (isLegacy) {
-    return "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'";
-  }
   return "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'";
 }
 
@@ -379,28 +374,9 @@ app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 
 app.get(['/', '/index.html'], (req, res, next) => {
   const spaIndex = path.join(__dirname, 'public', 'app', 'index.html');
-  if (fs.existsSync(spaIndex)) {
-    setApiTokenCookie(req, res);
-    return res.sendFile(spaIndex);
-  }
-
-  const legacyIndex = path.join(__dirname, 'public', 'index.html');
-  if (!fs.existsSync(legacyIndex)) return next();
-  let html = fs.readFileSync(legacyIndex, 'utf8');
-  html = html.replace('__TUNNEL_API_TOKEN__', JSON.stringify(''));
+  if (!fs.existsSync(spaIndex)) return next();
   setApiTokenCookie(req, res);
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  return res.send(html);
-});
-
-app.get(['/legacy', '/legacy/index.html'], (req, res, next) => {
-  const legacyIndex = path.join(__dirname, 'public', 'index.html');
-  if (!fs.existsSync(legacyIndex)) return next();
-  let html = fs.readFileSync(legacyIndex, 'utf8');
-  html = html.replace('__TUNNEL_API_TOKEN__', JSON.stringify(''));
-  setApiTokenCookie(req, res);
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  return res.send(html);
+  return res.sendFile(spaIndex);
 });
 
 app.get(['/app', '/app/*'], (req, res, next) => {
