@@ -24,6 +24,11 @@ const TAB_ITEMS = [
 ];
 
 const EMPTY_SERVICE = { name: '', subdomain: '', target: '', enabled: true };
+const DEFAULT_FAILOVER_POLICY = {
+  activeFailuresRequired: 2,
+  candidateSuccessesRequired: 2,
+  cooldownMs: 120000
+};
 
 function randomId(prefix = 'vps') {
   return `${prefix}-${Math.random().toString(16).slice(2, 10)}`;
@@ -46,6 +51,12 @@ function normalizeConfig(cfg) {
   out.vpsTargets = Array.isArray(out.vpsTargets) ? out.vpsTargets : [];
   out.services = Array.isArray(out.services) ? out.services : [];
   out.serviceHealth = out.serviceHealth && typeof out.serviceHealth === 'object' ? out.serviceHealth : {};
+  const failoverPolicy = out.failoverPolicy && typeof out.failoverPolicy === 'object' ? out.failoverPolicy : {};
+  out.failoverPolicy = {
+    activeFailuresRequired: Number.parseInt(failoverPolicy.activeFailuresRequired, 10) || DEFAULT_FAILOVER_POLICY.activeFailuresRequired,
+    candidateSuccessesRequired: Number.parseInt(failoverPolicy.candidateSuccessesRequired, 10) || DEFAULT_FAILOVER_POLICY.candidateSuccessesRequired,
+    cooldownMs: Number.parseInt(failoverPolicy.cooldownMs, 10) || DEFAULT_FAILOVER_POLICY.cooldownMs
+  };
   out.activeVpsId = out.activeVpsId || out.vpsTargets[0]?.id || '';
   return out;
 }
@@ -64,6 +75,7 @@ function initialState() {
     acmeEmail: '',
     services: [],
     serviceHealth: {},
+    failoverPolicy: { ...DEFAULT_FAILOVER_POLICY },
     auth: { passwordEnabled: false, sessionCount: 0 }
   };
 }
@@ -253,6 +265,11 @@ export function App() {
         vpsPubKey: (cfg.vpsPubKey || '').trim(),
         vpsTargets: collectTargets(),
         activeVpsId: cfg.activeVpsId || '',
+        failoverPolicy: {
+          activeFailuresRequired: Number.parseInt(cfg.failoverPolicy?.activeFailuresRequired, 10) || DEFAULT_FAILOVER_POLICY.activeFailuresRequired,
+          candidateSuccessesRequired: Number.parseInt(cfg.failoverPolicy?.candidateSuccessesRequired, 10) || DEFAULT_FAILOVER_POLICY.candidateSuccessesRequired,
+          cooldownMs: Number.parseInt(cfg.failoverPolicy?.cooldownMs, 10) || DEFAULT_FAILOVER_POLICY.cooldownMs
+        },
         domain: (cfg.domain || '').trim(),
         acmeEmail: (cfg.acmeEmail || '').trim(),
         privateKey: '••••',
@@ -552,6 +569,43 @@ export function App() {
           <input value={cfg.domain || ''} onInput={e => setField('domain', e.currentTarget.value)} placeholder="home.tudominio.com" />
           <label>Email para Let's Encrypt</label>
           <input type="email" value={cfg.acmeEmail || ''} onInput={e => setField('acmeEmail', e.currentTarget.value)} placeholder="tu@email.com" />
+        </section>
+
+        <section className="panel">
+          <h2>Politica de failover</h2>
+          <label>Fallos consecutivos del VPS activo para forzar cambio</label>
+          <input
+            type="number"
+            min="1"
+            max="10"
+            value={cfg.failoverPolicy?.activeFailuresRequired ?? DEFAULT_FAILOVER_POLICY.activeFailuresRequired}
+            onInput={e => setField('failoverPolicy', {
+              ...(cfg.failoverPolicy || DEFAULT_FAILOVER_POLICY),
+              activeFailuresRequired: e.currentTarget.value
+            })}
+          />
+          <label>Exitos consecutivos del candidato para aceptar cambio</label>
+          <input
+            type="number"
+            min="1"
+            max="10"
+            value={cfg.failoverPolicy?.candidateSuccessesRequired ?? DEFAULT_FAILOVER_POLICY.candidateSuccessesRequired}
+            onInput={e => setField('failoverPolicy', {
+              ...(cfg.failoverPolicy || DEFAULT_FAILOVER_POLICY),
+              candidateSuccessesRequired: e.currentTarget.value
+            })}
+          />
+          <label>Cooldown entre cambios automaticos (ms)</label>
+          <input
+            type="number"
+            min="0"
+            max="3600000"
+            value={cfg.failoverPolicy?.cooldownMs ?? DEFAULT_FAILOVER_POLICY.cooldownMs}
+            onInput={e => setField('failoverPolicy', {
+              ...(cfg.failoverPolicy || DEFAULT_FAILOVER_POLICY),
+              cooldownMs: e.currentTarget.value
+            })}
+          />
         </section>
 
         <section className="panel">

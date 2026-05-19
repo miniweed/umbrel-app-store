@@ -4,7 +4,7 @@ name: Tunnel
 tagline: Expón tu servidor al mundo sin tocar el router
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.png
 category: networking
-version: "1.6.11"
+version: "1.6.12"
 port: 3016
 description: >-
   Conecta tu Umbrel a un VPS propio y expón servicios a internet sin abrir puertos
@@ -17,6 +17,6 @@ repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
 releaseNotes: >-
-  Corregido bug en "Servicios a exponer" donde los campos Subdominio/IP perdían foco al escribir. Además se actualiza la imagen `web` a `1.6.11`.
+  Añadidos controles en la UI para configurar la política de failover (fallos, éxitos y cooldown), y actualización de imagen `web` a `1.6.12`.
 dependencies: []
 defaultPassword: ""
