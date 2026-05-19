@@ -20,7 +20,17 @@ export interface paths {
                 cookie?: never;
             };
             requestBody?: never;
-            responses: never;
+            responses: {
+                /** @description Current configuration snapshot for UI */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ConfigResponse"];
+                    };
+                };
+            };
         };
         put?: never;
         /** Update configuration */
@@ -31,8 +41,22 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
-            responses: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ConfigUpdateRequest"];
+                };
+            };
+            responses: {
+                /** @description Configuration persisted and health recalculated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ConfigUpdateResponse"];
+                    };
+                };
+            };
         };
         delete?: never;
         options?: never;
@@ -56,7 +80,17 @@ export interface paths {
                 cookie?: never;
             };
             requestBody?: never;
-            responses: never;
+            responses: {
+                /** @description WireGuard runtime status */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StatusResponse"];
+                    };
+                };
+            };
         };
         put?: never;
         post?: never;
@@ -82,7 +116,17 @@ export interface paths {
                 cookie?: never;
             };
             requestBody?: never;
-            responses: never;
+            responses: {
+                /** @description Generated key metadata */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["KeygenResponse"];
+                    };
+                };
+            };
         };
         put?: never;
         post?: never;
@@ -135,8 +179,22 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
-            responses: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["LoginRequest"];
+                };
+            };
+            responses: {
+                /** @description Session established */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthOkResponse"];
+                    };
+                };
+            };
         };
         delete?: never;
         options?: never;
@@ -161,8 +219,22 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
-            responses: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PasswordRequest"];
+                };
+            };
+            responses: {
+                /** @description Password configured */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthOkResponse"];
+                    };
+                };
+            };
         };
         delete?: never;
         options?: never;
@@ -186,7 +258,17 @@ export interface paths {
                 cookie?: never;
             };
             requestBody?: never;
-            responses: never;
+            responses: {
+                /** @description Allowed keys */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthPubkeysResponse"];
+                    };
+                };
+            };
         };
         put?: never;
         /** Add allowed Ed25519 public key */
@@ -197,8 +279,22 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
-            responses: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AuthPubkeyAddRequest"];
+                };
+            };
+            responses: {
+                /** @description Key registered */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthPubkeyAddResponse"];
+                    };
+                };
+            };
         };
         delete?: never;
         options?: never;
@@ -225,7 +321,17 @@ export interface paths {
                 cookie?: never;
             };
             requestBody?: never;
-            responses: never;
+            responses: {
+                /** @description Key deleted */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthOkResponse"];
+                    };
+                };
+            };
         };
         options?: never;
         head?: never;
@@ -248,7 +354,17 @@ export interface paths {
                 cookie?: never;
             };
             requestBody?: never;
-            responses: never;
+            responses: {
+                /** @description Active sessions */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthSessionsResponse"];
+                    };
+                };
+            };
         };
         put?: never;
         post?: never;
@@ -277,8 +393,54 @@ export interface paths {
                 cookie?: never;
             };
             requestBody?: never;
-            responses: never;
+            responses: {
+                /** @description Session revoked */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthOkResponse"];
+                    };
+                };
+            };
         };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Logout current session */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Session removed */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthOkResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -301,8 +463,22 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
-            responses: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AuthChallengeRequest"];
+                };
+            };
+            responses: {
+                /** @description Challenge generated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthChallengeResponse"];
+                    };
+                };
+            };
         };
         delete?: never;
         options?: never;
@@ -327,8 +503,22 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
-            responses: never;
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AuthVerifyRequest"];
+                };
+            };
+            responses: {
+                /** @description Signature accepted and session issued */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AuthVerifyResponse"];
+                    };
+                };
+            };
         };
         delete?: never;
         options?: never;
@@ -742,6 +932,142 @@ export interface components {
             entries: number;
             brokenAt?: number;
             reason?: string;
+        };
+        ConfigUpdateRequest: {
+            vpsIp?: string;
+            vpsPort?: number;
+            vpsPubKey?: string;
+            activeVpsId?: string;
+            domain?: string;
+            /** Format: email */
+            acmeEmail?: string;
+            privateKey?: string;
+            services?: ({
+                name?: string;
+                subdomain?: string;
+                target?: string;
+                enabled?: boolean;
+            } & {
+                [key: string]: unknown;
+            })[];
+            vpsTargets?: components["schemas"]["VpsTarget"][];
+        } & {
+            [key: string]: unknown;
+        };
+        ConfigResponse: {
+            vpsIp?: string;
+            vpsPort?: number;
+            vpsPubKey?: string;
+            activeVpsId: string;
+            domain?: string;
+            acmeEmail?: string;
+            vpsTargets: components["schemas"]["VpsTarget"][];
+            auth: {
+                passwordEnabled: boolean;
+                sessionCount: number;
+            };
+            privateKey: string;
+            vpsPubKeyFingerprint: string;
+            vpsFingerprints: {
+                [key: string]: string;
+            };
+            services?: ({
+                name?: string;
+                subdomain?: string;
+                target?: string;
+                enabled?: boolean;
+            } & {
+                [key: string]: unknown;
+            })[];
+            serviceHealth?: {
+                [key: string]: {
+                    ok?: boolean;
+                    checked?: boolean;
+                    statusCode?: number;
+                    message?: string;
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        } & {
+            [key: string]: unknown;
+        };
+        ConfigUpdateResponse: {
+            ok: boolean;
+            serviceHealth: {
+                [key: string]: {
+                    ok?: boolean;
+                    checked?: boolean;
+                    statusCode?: number;
+                    message?: string;
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        KeygenResponse: {
+            publicKey: string;
+            publicKeyFingerprint: string;
+        };
+        StatusResponse: {
+            connected: boolean;
+            raw: string;
+            peerCount?: number;
+        } & {
+            [key: string]: unknown;
+        };
+        AuthOkResponse: {
+            ok: boolean;
+        };
+        PasswordRequest: {
+            password: string;
+        };
+        LoginRequest: {
+            password: string;
+        };
+        AuthSession: {
+            id: string;
+            createdAt: number;
+            expiresAt: number;
+            ip: string;
+            source: string;
+            current: boolean;
+        };
+        AuthSessionsResponse: {
+            sessions: components["schemas"]["AuthSession"][];
+        };
+        AuthPubkeyItem: {
+            id: string;
+            name: string;
+            addedAt: number;
+        };
+        AuthPubkeysResponse: {
+            pubkeys: components["schemas"]["AuthPubkeyItem"][];
+        };
+        AuthPubkeyAddRequest: {
+            name: string;
+            publicKey: string;
+        };
+        AuthPubkeyAddResponse: {
+            ok: boolean;
+            keyId: string;
+        };
+        AuthChallengeRequest: {
+            keyId: string;
+        };
+        AuthChallengeResponse: {
+            challengeId: string;
+            nonce: string;
+            expiresInSec: number;
+        };
+        AuthVerifyRequest: {
+            challengeId: string;
+            signature: string;
+        };
+        AuthVerifyResponse: {
+            ok: boolean;
+            sessionToken: string;
+            expiresAt: number;
         };
     };
     responses: never;

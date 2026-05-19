@@ -2060,47 +2060,502 @@ app.get('/api/openapi.json', (req, res) => {
             brokenAt: { type: 'integer' },
             reason: { type: 'string' }
           }
+        },
+        ConfigUpdateRequest: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            vpsIp: { type: 'string' },
+            vpsPort: { type: 'integer' },
+            vpsPubKey: { type: 'string' },
+            activeVpsId: { type: 'string' },
+            domain: { type: 'string' },
+            acmeEmail: { type: 'string', format: 'email' },
+            privateKey: { type: 'string' },
+            services: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: true,
+                properties: {
+                  name: { type: 'string' },
+                  subdomain: { type: 'string' },
+                  target: { type: 'string' },
+                  enabled: { type: 'boolean' }
+                }
+              }
+            },
+            vpsTargets: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/VpsTarget' }
+            }
+          }
+        },
+        ConfigResponse: {
+          type: 'object',
+          additionalProperties: true,
+          required: ['vpsTargets', 'activeVpsId', 'auth', 'privateKey', 'vpsPubKeyFingerprint', 'vpsFingerprints'],
+          properties: {
+            vpsIp: { type: 'string' },
+            vpsPort: { type: 'integer' },
+            vpsPubKey: { type: 'string' },
+            activeVpsId: { type: 'string' },
+            domain: { type: 'string' },
+            acmeEmail: { type: 'string' },
+            vpsTargets: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/VpsTarget' }
+            },
+            auth: {
+              type: 'object',
+              required: ['passwordEnabled', 'sessionCount'],
+              properties: {
+                passwordEnabled: { type: 'boolean' },
+                sessionCount: { type: 'integer' }
+              }
+            },
+            privateKey: { type: 'string' },
+            vpsPubKeyFingerprint: { type: 'string' },
+            vpsFingerprints: {
+              type: 'object',
+              additionalProperties: { type: 'string' }
+            },
+            services: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: true,
+                properties: {
+                  name: { type: 'string' },
+                  subdomain: { type: 'string' },
+                  target: { type: 'string' },
+                  enabled: { type: 'boolean' }
+                }
+              }
+            },
+            serviceHealth: {
+              type: 'object',
+              additionalProperties: {
+                type: 'object',
+                additionalProperties: true,
+                properties: {
+                  ok: { type: 'boolean' },
+                  checked: { type: 'boolean' },
+                  statusCode: { type: 'integer' },
+                  message: { type: 'string' }
+                }
+              }
+            }
+          }
+        },
+        ConfigUpdateResponse: {
+          type: 'object',
+          required: ['ok', 'serviceHealth'],
+          properties: {
+            ok: { type: 'boolean' },
+            serviceHealth: {
+              type: 'object',
+              additionalProperties: {
+                type: 'object',
+                additionalProperties: true,
+                properties: {
+                  ok: { type: 'boolean' },
+                  checked: { type: 'boolean' },
+                  statusCode: { type: 'integer' },
+                  message: { type: 'string' }
+                }
+              }
+            }
+          }
+        },
+        KeygenResponse: {
+          type: 'object',
+          required: ['publicKey', 'publicKeyFingerprint'],
+          properties: {
+            publicKey: { type: 'string', pattern: '^[A-Za-z0-9+/]{43}=$' },
+            publicKeyFingerprint: { type: 'string' }
+          }
+        },
+        StatusResponse: {
+          type: 'object',
+          additionalProperties: true,
+          required: ['connected', 'raw'],
+          properties: {
+            connected: { type: 'boolean' },
+            raw: { type: 'string' },
+            peerCount: { type: 'integer' }
+          }
+        },
+        AuthOkResponse: {
+          type: 'object',
+          required: ['ok'],
+          properties: {
+            ok: { type: 'boolean' }
+          }
+        },
+        PasswordRequest: {
+          type: 'object',
+          required: ['password'],
+          properties: {
+            password: { type: 'string', minLength: 12, maxLength: 256 }
+          }
+        },
+        LoginRequest: {
+          type: 'object',
+          required: ['password'],
+          properties: {
+            password: { type: 'string' }
+          }
+        },
+        AuthSession: {
+          type: 'object',
+          required: ['id', 'createdAt', 'expiresAt', 'ip', 'source', 'current'],
+          properties: {
+            id: { type: 'string' },
+            createdAt: { type: 'integer' },
+            expiresAt: { type: 'integer' },
+            ip: { type: 'string' },
+            source: { type: 'string' },
+            current: { type: 'boolean' }
+          }
+        },
+        AuthSessionsResponse: {
+          type: 'object',
+          required: ['sessions'],
+          properties: {
+            sessions: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/AuthSession' }
+            }
+          }
+        },
+        AuthPubkeyItem: {
+          type: 'object',
+          required: ['id', 'name', 'addedAt'],
+          properties: {
+            id: { type: 'string' },
+            name: { type: 'string' },
+            addedAt: { type: 'integer' }
+          }
+        },
+        AuthPubkeysResponse: {
+          type: 'object',
+          required: ['pubkeys'],
+          properties: {
+            pubkeys: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/AuthPubkeyItem' }
+            }
+          }
+        },
+        AuthPubkeyAddRequest: {
+          type: 'object',
+          required: ['name', 'publicKey'],
+          properties: {
+            name: { type: 'string' },
+            publicKey: { type: 'string' }
+          }
+        },
+        AuthPubkeyAddResponse: {
+          type: 'object',
+          required: ['ok', 'keyId'],
+          properties: {
+            ok: { type: 'boolean' },
+            keyId: { type: 'string' }
+          }
+        },
+        AuthChallengeRequest: {
+          type: 'object',
+          required: ['keyId'],
+          properties: {
+            keyId: { type: 'string' }
+          }
+        },
+        AuthChallengeResponse: {
+          type: 'object',
+          required: ['challengeId', 'nonce', 'expiresInSec'],
+          properties: {
+            challengeId: { type: 'string' },
+            nonce: { type: 'string' },
+            expiresInSec: { type: 'integer' }
+          }
+        },
+        AuthVerifyRequest: {
+          type: 'object',
+          required: ['challengeId', 'signature'],
+          properties: {
+            challengeId: { type: 'string' },
+            signature: { type: 'string' }
+          }
+        },
+        AuthVerifyResponse: {
+          type: 'object',
+          required: ['ok', 'sessionToken', 'expiresAt'],
+          properties: {
+            ok: { type: 'boolean' },
+            sessionToken: { type: 'string' },
+            expiresAt: { type: 'integer' }
+          }
         }
       }
     },
     paths: {
       '/api/config': {
-        post: { summary: 'Update configuration' },
-        get: { summary: 'Get configuration' }
+        get: {
+          summary: 'Get configuration',
+          responses: {
+            '200': {
+              description: 'Current configuration snapshot for UI',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/ConfigResponse' }
+                }
+              }
+            }
+          }
+        },
+        post: {
+          summary: 'Update configuration',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ConfigUpdateRequest' }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Configuration persisted and health recalculated',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/ConfigUpdateResponse' }
+                }
+              }
+            }
+          }
+        }
       },
       '/api/status': {
-        get: { summary: 'Get tunnel runtime status' }
+        get: {
+          summary: 'Get tunnel runtime status',
+          responses: {
+            '200': {
+              description: 'WireGuard runtime status',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/StatusResponse' }
+                }
+              }
+            }
+          }
+        }
       },
       '/api/keygen': {
-        get: { summary: 'Generate a new WireGuard key pair' }
+        get: {
+          summary: 'Generate a new WireGuard key pair',
+          responses: {
+            '200': {
+              description: 'Generated key metadata',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/KeygenResponse' }
+                }
+              }
+            }
+          }
+        }
       },
       '/api/health/refresh': {
         post: { summary: 'Refresh service and VPS health checks now' }
       },
       '/api/auth/login': {
-        post: { summary: 'Password login' }
+        post: {
+          summary: 'Password login',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/LoginRequest' }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Session established',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AuthOkResponse' }
+                }
+              }
+            }
+          }
+        }
       },
       '/api/auth/password': {
-        post: { summary: 'Set or rotate UI password' }
+        post: {
+          summary: 'Set or rotate UI password',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/PasswordRequest' }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Password configured',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AuthOkResponse' }
+                }
+              }
+            }
+          }
+        }
       },
       '/api/auth/pubkeys': {
-        get: { summary: 'List allowed Ed25519 public keys' },
-        post: { summary: 'Add allowed Ed25519 public key' }
+        get: {
+          summary: 'List allowed Ed25519 public keys',
+          responses: {
+            '200': {
+              description: 'Allowed keys',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AuthPubkeysResponse' }
+                }
+              }
+            }
+          }
+        },
+        post: {
+          summary: 'Add allowed Ed25519 public key',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/AuthPubkeyAddRequest' }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Key registered',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AuthPubkeyAddResponse' }
+                }
+              }
+            }
+          }
+        }
       },
       '/api/auth/pubkeys/{id}': {
-        delete: { summary: 'Delete allowed Ed25519 public key' }
+        delete: {
+          summary: 'Delete allowed Ed25519 public key',
+          responses: {
+            '200': {
+              description: 'Key deleted',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AuthOkResponse' }
+                }
+              }
+            }
+          }
+        }
       },
       '/api/auth/sessions': {
-        get: { summary: 'List active UI sessions' }
+        get: {
+          summary: 'List active UI sessions',
+          responses: {
+            '200': {
+              description: 'Active sessions',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AuthSessionsResponse' }
+                }
+              }
+            }
+          }
+        }
       },
       '/api/auth/sessions/{id}': {
-        delete: { summary: 'Revoke UI session' }
+        delete: {
+          summary: 'Revoke UI session',
+          responses: {
+            '200': {
+              description: 'Session revoked',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AuthOkResponse' }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/auth/logout': {
+        post: {
+          summary: 'Logout current session',
+          responses: {
+            '200': {
+              description: 'Session removed',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AuthOkResponse' }
+                }
+              }
+            }
+          }
+        }
       },
       '/api/auth/challenge': {
-        post: { summary: 'Get challenge for pubkey auth' }
+        post: {
+          summary: 'Get challenge for pubkey auth',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/AuthChallengeRequest' }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Challenge generated',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AuthChallengeResponse' }
+                }
+              }
+            }
+          }
+        }
       },
       '/api/auth/verify': {
-        post: { summary: 'Verify challenge signature and issue session' }
+        post: {
+          summary: 'Verify challenge signature and issue session',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/AuthVerifyRequest' }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Signature accepted and session issued',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AuthVerifyResponse' }
+                }
+              }
+            }
+          }
+        }
       },
       '/api/rotate/prepare': {
         post: {
