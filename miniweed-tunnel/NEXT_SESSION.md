@@ -6,90 +6,73 @@ Last updated: 2026-05-19
 
 - Branch: `main`
 - Working tree at handoff: clean
-- Latest pushed commit: `0d50e3f`
+- Latest pushed commit: `83fd442`
+- Latest released app version in store: `1.6.0`
 
 ## What was completed in this chat
 
-### Commits produced
+### Commits produced in this phase
 
-1. `8721702` - Add multi-VPS failover controls and CrowdSec-ready setup scripts
-2. `267408a` - Strengthen non-provider failover checks and CrowdSec operations
-3. `8e5518f` - Document full session handoff and add quick pointer
-4. `cfe78d4` - Add SPA scaffold and typed API contract pipeline
-5. `713feda` - Improve test/server lifecycle cleanup and quieter Jest output
-6. `19e397a` - Migrate core legacy UI flows into SPA frontend
-7. `bf0053c` - Refine SPA parity with legacy UI behaviors
-8. `cefc559` - Serve SPA as default UI with legacy fallback route
-9. `083a835` - Refresh NEXT_SESSION with SPA-default and contract progress
-10. `bb9ddad` - Release miniweed-tunnel 1.5.0 with SPA default UI
-11. `b59c4d2` - Extend CI with API contract and SPA build checks
-12. `0a85746` - Add failover edge-case integration coverage
-13. `408bd46` - Update handoff with release, CI, and failover test progress
-14. `2ec9c15` - Fix SPA asset base path for /app deployment
-15. `9265275` - Release miniweed-tunnel 1.5.1 with SPA base-path fix
-16. `f7f9daf` - Bootstrap persistent app seed when env seed is absent
-17. `1b07551` - Release miniweed-tunnel 1.5.2 with startup seed bootstrap
-18. `044958d` - Avoid fatal boot when API token persistence is unavailable
-19. `2848d69` - Release miniweed-tunnel 1.5.3 with resilient boot fallbacks
-20. `d625462` - Include api-spec files in web image build
-21. `0d50e3f` - Release miniweed-tunnel 1.5.4 with api-spec packaging fix
+1. `7ed26a4` - Harden API contract typing and CI drift checks
+2. `a8f1dfd` - Extend failover coverage for manual and recovery paths
+3. `b6847e0` - Harden CrowdSec setup verification and recovery guidance
+4. `972b644` - Release miniweed-tunnel 1.5.5 with hardening updates
+5. `5c9d4c3` - Release miniweed-tunnel 1.5.6 with config validation hotfix
+6. `8c8b407` - Release miniweed-tunnel 1.5.7 with required-field UI highlights
+7. `9ac006c` - Harden auth, failover policy, and SPA CSP behavior
+8. `83fd442` - Release miniweed-tunnel 1.6.0 with security hardening
 
-### P4-20 + P4-21 (without provider API)
+### Security and architecture hardening delivered
 
-- Multi-VPS model in backend (`vpsTargets[]`, `activeVpsId`) with legacy field compatibility.
-- Failover implemented with health probes and anti-flapping thresholds/cooldown.
-- Endpoints delivered:
-  - `GET /api/vps/targets`
-  - `POST /api/vps/failover`
-  - `GET /api/vps-setup-script?vpsId=...&withCrowdsec=1`
-- CrowdSec optional setup integrated in generated script (`withCrowdsec=1`).
-- Operational CrowdSec assets delivered:
-  - `vps-setup/crowdsec-smoke.sh`
-  - `vps-setup/crowdsec-recovery.md`
+- Added formal Zod validation on:
+  - `POST /api/auth/password`
+  - `POST /api/auth/login`
+- Extended config at-rest encryption to include auth-sensitive runtime data:
+  - `auth.passwordHash`
+  - `auth.sessions`
+- Added backward-compatible decrypt/normalize flow so legacy plaintext config still loads.
+- Introduced configurable failover policy via config/API:
+  - `failoverPolicy.activeFailuresRequired`
+  - `failoverPolicy.candidateSuccessesRequired`
+  - `failoverPolicy.cooldownMs`
+  - with sane defaults and validation bounds.
+- CSP tightened by route:
+  - strict CSP for SPA routes (`/`, `/app`, `/app/*`) without `unsafe-inline`
+  - compatibility CSP retained for `/legacy` routes temporarily.
 
-### P3-16 SPA migration and route switch
+### Product and UX improvements delivered
 
-- New SPA app under `web/ui/` now includes major parity with legacy tabs/flows:
-  - dashboard/status/services links
-  - config + auth + services + vps setup/failover
-- SPA is now default at `/` and `/index.html` when build exists.
-- Legacy UI kept as fallback route at `/legacy` and `/legacy/index.html`.
+- SPA config tab now highlights required fields for script generation:
+  - Umbrel public key
+  - VPS public IP
+- Setup validation hotfix shipped to avoid false `validation` failures during initial setup with optional empty fields.
 
-### P3-17 contract pipeline
+### P4-20 + P4-21 hardening delivered
 
-- Generated OpenAPI runtime snapshot to `web/api-spec/openapi.json`.
-- Generated TypeScript declarations to `web/api-spec/openapi.d.ts`.
-- Added tooling scripts:
-  - `tools/generate-openapi.js`
-  - `tools/check-openapi.js`
-- Added npm scripts in `web/package.json`:
-  - `api:spec`, `api:spec:check`, `api:types`, `api:contract`, `ui:build`, `build`
+- Added/expanded failover edge-case tests including manual/auto interplay and recovery paths.
+- CrowdSec setup script hardening:
+  - safer installer invocation
+  - post-install health checks and warnings
+  - improved smoke + recovery docs.
 
-### Test/runtime hygiene improvements
+### Contract and CI status
 
-- Added background timer lifecycle helpers in server (`ensureBackgroundTimers`, `stopBackgroundTimers`).
-- Added explicit test cleanup for server/timers and quieter test logs.
-- Jest warning about open handles may still appear in normal run, but suites pass.
+- OpenAPI runtime snapshot and generated TS types are in place and updated.
+- CI drift guard (`api:contract:drift`) is active and enforces contract file sync.
 
-### Release and CI updates
+## Validation performed in this phase
 
-- Umbrel app released iteratively to `1.5.4` with startup and packaging fixes.
-- CI now validates API contract snapshot and SPA build in `.github/workflows/ci.yml`.
-- Failover edge-case integration tests added for:
-  - streak/cooldown/recovery behavior
-  - tie-break by lexical name when priorities are equal
-- Production install blockers fixed in release train:
-  - SPA asset base path fixed for `/app` deployments.
-  - resilient boot without mandatory env seed/token.
-  - missing `api-spec/` packaging fixed in web image (resolved `Cannot find module './api-spec/schemas'`).
-
-## Validation performed
-
-- `npm run api:contract` in `miniweed-tunnel/web` -> passing.
+- `npm test -- --runInBand` in `miniweed-tunnel/web` -> passing (27 tests).
 - `npm run ui:build` in `miniweed-tunnel/web` -> passing.
-- `npm test -- --runInBand` in `miniweed-tunnel/web` -> passing (21 tests).
-- `python3 -m py_compile miniweed-tunnel/wg-client/wg-api.py` -> passing.
-- `shellcheck` run on critical scripts in prior phase -> passing.
+- `npm run api:contract` in `miniweed-tunnel/web` -> passing.
+
+## Feedback checklist status (external review)
+
+1. Zod on auth password/login: **DONE**.
+2. CSP `unsafe-inline`: **PARTIAL DONE** (removed for SPA, kept for legacy compatibility).
+3. Session storage plaintext in config: **DONE** (sessions and passwordHash sealed at rest).
+4. Failover thresholds hardcoded: **DONE** (policy configurable via config/API).
+5. MX validation for email: **DONE** (DNS MX lookup is implemented and enforced on config save).
 
 ## Plan status vs `MEJORAS_SIN_DEPLOY.md`
 
@@ -99,31 +82,35 @@ Last updated: 2026-05-19
 - P1-4, P1-5, P1-6, P1-7, P1-8
 - P2-9, P2-10, P2-11, P2-12
 - P3-13, P3-14, P3-15
-- P3-16 mostly implemented (SPA now default, legacy fallback kept)
-- P3-17 mostly implemented (OpenAPI + generated types + scripts)
+- P3-16 mostly implemented (SPA default + legacy fallback)
+- P3-17 strongly advanced (contract generation, typed client usage, CI drift guard)
 - P4-18, P4-19
-- P4-20 largely implemented
-- P4-21 partially-to-strongly implemented without provider API
+- P4-20 strongly implemented + additional edge-case coverage
+- P4-21 strongly advanced without provider API
 
 ### Still pending / next high-value work
 
 1. P3-16 parity final pass:
-   - minor UX/message parity details vs legacy
-   - decide removal timeline for legacy route
-2. P3-17 hardening:
-   - consume generated `openapi.d.ts` types deeply in SPA client code
-   - tighten CI to regenerate+diff contract (`api:spec` drift guard)
-   - align Docker image copy list with any future runtime imports to prevent packaging regressions
-3. P4-20 hardening pass:
-   - extend edge-case tests beyond current coverage (manual/auto interplay, disabled-target recovery)
-4. P4-21 hardening pass:
-   - deeper CrowdSec bouncer/firewall checks in docs/tests
-5. Test hygiene:
-   - investigate remaining Jest open-handle warning to fully silence
+   - remaining minor UX/messaging parity vs legacy
+   - decide and execute legacy route deprecation/removal timeline
+2. P3-17 deep adoption:
+   - deeper end-to-end use of generated types across SPA state/UI boundaries
+3. CSP finalization:
+   - remove `unsafe-inline` from legacy path (or retire legacy route fully)
+4. Test/runtime hygiene:
+   - finish investigation of intermittent Jest open-handle warning (if still seen in some environments)
+5. Optional ops hardening:
+   - expose failover policy controls in SPA UI (currently backend/API-ready)
 
 ## Suggested resume point
 
 When resuming, start from:
 
 - `miniweed-tunnel/NEXT_SESSION.md`
-- `MEJORAS_SIN_DEPLOY.md` (focus P3-17 hardening + P4 edge-case hardening)
+- `MEJORAS_SIN_DEPLOY.md`
+
+Suggested immediate focus order:
+
+1. Verify `1.6.0` behavior in Umbrel install/update flow and fresh setup flow.
+2. Final P3-16 parity sweep and legacy route strategy.
+3. CSP full closure (legacy removal or nonce/hash migration).
