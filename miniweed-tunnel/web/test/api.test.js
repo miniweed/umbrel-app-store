@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const zlib = require('zlib');
 
 jest.mock('dns', () => ({
   promises: {
@@ -99,6 +100,23 @@ function req(port, method, pathname, body = null, headers = {}) {
     if (body) client.write(body);
     client.end();
   });
+}
+
+function buildBackupPayloadForTest(entries, passphrase) {
+  const chunks = [];
+  for (const [name, value] of Object.entries(entries)) {
+    const body = Buffer.from(String(value), 'utf8');
+    chunks.push(Buffer.from(`${name}:${body.length}\n`, 'utf8'));
+    chunks.push(body);
+  }
+  const compressed = zlib.gzipSync(Buffer.concat(chunks));
+  const salt = crypto.randomBytes(16);
+  const key = crypto.scryptSync(passphrase, salt, 32, { N: 1 << 16, r: 8, p: 1, maxmem: 128 * 1024 * 1024 });
+  const nonce = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
+  const ciphertext = Buffer.concat([cipher.update(compressed), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return Buffer.concat([Buffer.from('MWBK', 'utf8'), salt, nonce, ciphertext, tag]);
 }
 
 describe('api hardening', () => {
@@ -733,6 +751,43 @@ describe('api hardening', () => {
     expect(Array.isArray(malformedBody.issues)).toBe(true);
   });
 
+  test('validation rejects malformed vps IPv4 in config update', async () => {
+    const malformed = await req(port, 'POST', '/api/config', JSON.stringify({
+      vpsIp: '999.999.999.999',
+      domain: 'example.com',
+      acmeEmail: 'ops@example.com'
+    }), {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(malformed.status).toBe(400);
+    const body = JSON.parse(malformed.body);
+    expect(body.error).toBe('validation');
+  });
+
+  test('validation rejects malformed vps target IPv4 in config update', async () => {
+    const malformed = await req(port, 'POST', '/api/config', JSON.stringify({
+      vpsTargets: [{
+        id: 'bad-ip',
+        name: 'Bad IP',
+        ip: 'not-an-ip',
+        port: 51820,
+        pubKey: 'A'.repeat(43) + '=',
+        enabled: true,
+        priority: 0
+      }],
+      activeVpsId: 'bad-ip',
+      domain: 'example.com',
+      acmeEmail: 'ops@example.com'
+    }), {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(malformed.status).toBe(400);
+    const body = JSON.parse(malformed.body);
+    expect(body.error).toBe('validation');
+  });
+
   test('can set and use UI password session login', async () => {
     const setPwd = await req(port, 'POST', '/api/auth/password', JSON.stringify({ password: 'S3gura__pass__123' }), {
       'Content-Type': 'application/json',
@@ -969,6 +1024,27 @@ describe('api hardening', () => {
     const confirmBody = JSON.parse(confirm.body);
     expect(confirmBody.applied).toBe(true);
     expect(confirmBody.nextPublicKey).toBeTruthy();
+  });
+
+  test('restore rejects backup with config schema violations', async () => {
+    const payload = buildBackupPayloadForTest({
+      'meta.json': JSON.stringify({ ts: new Date().toISOString(), version: 1 }),
+      'config.json': JSON.stringify({
+        vpsIp: '999.999.999.999',
+        acmeEmail: 'ops@example.com',
+        domain: 'example.com'
+      })
+    }, 'StrongPassphrase__123');
+
+    const restoreBad = await req(port, 'POST', '/api/restore', payload, {
+      'Content-Type': 'application/octet-stream',
+      'x-backup-passphrase': 'StrongPassphrase__123',
+      'x-tunnel-api-token': token
+    });
+    expect(restoreBad.status).toBe(400);
+    const body = JSON.parse(restoreBad.body);
+    expect(body.error).toContain('config en backup no pasa validación');
+    expect(Array.isArray(body.issues)).toBe(true);
   });
 
   test('returns kill switch script with sha', async () => {

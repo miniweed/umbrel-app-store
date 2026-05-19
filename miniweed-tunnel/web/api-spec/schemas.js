@@ -4,6 +4,24 @@ const WG_KEY_RE = /^[A-Za-z0-9+/]{43}=$/;
 const OptionalWireGuardKeySchema = z.union([z.string().regex(WG_KEY_RE), z.literal('')]).optional();
 const OptionalEmailSchema = z.union([z.string().email(), z.literal('')]).optional();
 const OptionalStringOrEmptySchema = z.union([z.string().min(1), z.literal('')]).optional();
+function isValidIpv4(value) {
+  if (typeof value !== 'string') return false;
+  const parts = value.split('.');
+  if (parts.length !== 4) return false;
+  for (const part of parts) {
+    if (!/^\d+$/.test(part)) return false;
+    if (part.length > 1 && part.startsWith('0')) return false;
+    const n = Number(part);
+    if (!Number.isInteger(n) || n < 0 || n > 255) return false;
+  }
+  return true;
+}
+
+const OptionalIpv4OrEmptySchema = z.union([
+  z.string().refine(v => isValidIpv4(v), { message: 'IPv4 inválida' }),
+  z.literal('')
+]).optional();
+const OptionalPrivateKeyUpdateSchema = z.union([z.string().regex(WG_KEY_RE), z.literal(''), z.literal('••••')]).optional();
 const OptionalServiceNameSchema = z.union([z.string().min(1).max(64), z.literal('')]).optional();
 const OptionalSubdomainSchema = z.union([z.string().regex(/^[a-z0-9-]{1,63}$/), z.literal('')]).optional();
 const OptionalTargetSchema = z.union([z.string().regex(/^https?:\/\/[^\/\?#]+$/), z.literal('')]).optional();
@@ -23,7 +41,7 @@ const ServiceSchema = z.object({
 const VpsTargetSchema = z.object({
   id: z.string().min(1).max(64).optional(),
   name: z.string().min(1).max(64).optional(),
-  ip: OptionalStringOrEmptySchema,
+  ip: OptionalIpv4OrEmptySchema,
   port: z.number().int().min(1).max(65535).optional(),
   pubKey: OptionalWireGuardKeySchema,
   enabled: z.boolean().optional(),
@@ -31,7 +49,10 @@ const VpsTargetSchema = z.object({
 });
 
 const ConfigSchema = z.object({
-  vpsIp: OptionalStringOrEmptySchema,
+  privateKey: OptionalPrivateKeyUpdateSchema,
+  publicKey: OptionalWireGuardKeySchema,
+  presharedKey: OptionalWireGuardKeySchema,
+  vpsIp: OptionalIpv4OrEmptySchema,
   vpsPort: z.number().int().min(1).max(65535).optional(),
   vpsPubKey: OptionalWireGuardKeySchema,
   vpsTargets: z.array(VpsTargetSchema).max(8).optional(),

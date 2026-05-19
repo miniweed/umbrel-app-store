@@ -10,5 +10,12 @@ COPY api-spec ./api-spec
 COPY lib ./lib
 COPY public ./public
 
+RUN addgroup -S mw \
+  && adduser -S -G mw mw \
+  && mkdir -p /data \
+  && chown -R mw:mw /app /data
+
+USER mw
+
 EXPOSE 3000
 CMD ["node", "server.js"]

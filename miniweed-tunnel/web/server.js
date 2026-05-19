@@ -1429,7 +1429,7 @@ function buildBackupPayload(passphrase, includeAudit = true) {
 
   const compressed = zlib.gzipSync(Buffer.concat(chunks));
   const salt = crypto.randomBytes(16);
-  const key = crypto.scryptSync(passphrase, salt, 32, { N: 1 << 16, r: 8, p: 1 });
+  const key = crypto.scryptSync(passphrase, salt, 32, { N: 1 << 16, r: 8, p: 1, maxmem: 128 * 1024 * 1024 });
   const nonce = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
   const ciphertext = Buffer.concat([cipher.update(compressed), cipher.final()]);
@@ -1463,7 +1463,7 @@ function restoreBackupPayload(payload, passphrase) {
   const nonce = payload.slice(20, 32);
   const tag = payload.slice(payload.length - 16);
   const ciphertext = payload.slice(32, payload.length - 16);
-  const key = crypto.scryptSync(passphrase, salt, 32, { N: 1 << 16, r: 8, p: 1 });
+  const key = crypto.scryptSync(passphrase, salt, 32, { N: 1 << 16, r: 8, p: 1, maxmem: 128 * 1024 * 1024 });
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
   decipher.setAuthTag(tag);
   const compressed = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
@@ -1520,6 +1520,10 @@ app.get('/api/config', (req, res) => {
 app.post('/api/config', async (req, res) => {
   if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
     return res.status(400).json({ error: 'validation', issues: [{ path: [], message: 'body must be an object' }] });
+  }
+  const parsedBody = ConfigSchema.safeParse(req.body);
+  if (!parsedBody.success) {
+    return res.status(400).json({ error: 'validation', issues: parsedBody.error.issues });
   }
   try {
     const result = await withConfigLock(async () => {
@@ -1914,7 +1918,22 @@ app.post('/api/restore', express.raw({ type: 'application/octet-stream', limit: 
       return res.status(400).json({ error: 'meta inválida en backup' });
     }
 
-    if (entries['config.json']) JSON.parse(entries['config.json']);
+    if (entries['config.json']) {
+      const rawConfig = JSON.parse(entries['config.json']);
+      const parsedConfig = ConfigSchema.safeParse(rawConfig);
+      if (!parsedConfig.success) {
+        audit.log({
+          action: 'backup.restore.fail',
+          ip: req.ip,
+          reason: 'schema_validation',
+          issues: parsedConfig.error.issues
+        });
+        return res.status(400).json({
+          error: 'config en backup no pasa validación',
+          issues: parsedConfig.error.issues
+        });
+      }
+    }
     if (entries['known_hosts.json']) JSON.parse(entries['known_hosts.json']);
 
     const restoreDir = path.join(DATA_DIR, '.restore-staging');
