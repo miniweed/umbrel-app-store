@@ -4,10 +4,8 @@ set -e
 DATA_DIR="${DATA_DIR:-/data}"
 WG_CONF_SRC="$DATA_DIR/wg0.conf"
 WG_CONF="/etc/wireguard/wg0.conf"
-READY_FILE="$DATA_DIR/wg-ready"
 
 echo "[wg] Umbrel Tunnel WireGuard client starting..."
-rm -f "$READY_FILE"
 
 apply_wg_ingress_guard() {
     # Hardening: limit what a remote WG peer can reach in this namespace.
@@ -32,7 +30,6 @@ API_PID=$!
 
 cleanup() {
     echo "[wg] Shutting down..."
-    rm -f "$READY_FILE"
     wg-quick down wg0 2>/dev/null || true
     kill "$API_PID" 2>/dev/null || true
 }
@@ -53,7 +50,6 @@ until wg-quick up wg0; do
 done
 apply_wg_ingress_guard
 echo "[wg] Tunnel up"
-date -u +"%Y-%m-%dT%H:%M:%SZ" > "$READY_FILE"
 
 # Watch config for changes and syncconf (no interface teardown)
 PREV_HASH=$(md5sum "$WG_CONF_SRC" | cut -d' ' -f1)

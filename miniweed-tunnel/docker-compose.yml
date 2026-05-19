@@ -45,14 +45,14 @@ services:
       - sh
       - -c
       - |
-        until [ -s /data/Caddyfile ] && [ -f /data/wg-ready ]; do
-          echo "[caddy] Waiting for Caddyfile and WireGuard tunnel..."
+        until [ -s /data/Caddyfile ] && wget -q -O - http://127.0.0.1:8080/status >/dev/null 2>&1; do
+          echo "[caddy] Waiting for Caddyfile and WireGuard API..."
           sleep 2
         done
         exec caddy run --config /data/Caddyfile --adapter caddyfile --watch
 
   wg:
-    image: ghcr.io/miniweed/umbrel-tunnel-wg:1.0.4@sha256:9d7c7c3f005029cabdece1c23adbb48dd5e9d864f8548f7f791ff7876badf260
+    image: ghcr.io/miniweed/umbrel-tunnel-wg:1.0.5
     restart: on-failure
     stop_grace_period: 30s
     cap_drop:
