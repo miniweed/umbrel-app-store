@@ -360,13 +360,30 @@ function setApiTokenCookie(req, res) {
 
 app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 
-app.get(['/', '/index.html'], (req, res) => {
-  const indexPath = path.join(__dirname, 'public', 'index.html');
-  let html = fs.readFileSync(indexPath, 'utf8');
+app.get(['/', '/index.html'], (req, res, next) => {
+  const spaIndex = path.join(__dirname, 'public', 'app', 'index.html');
+  if (fs.existsSync(spaIndex)) {
+    setApiTokenCookie(req, res);
+    return res.sendFile(spaIndex);
+  }
+
+  const legacyIndex = path.join(__dirname, 'public', 'index.html');
+  if (!fs.existsSync(legacyIndex)) return next();
+  let html = fs.readFileSync(legacyIndex, 'utf8');
   html = html.replace('__TUNNEL_API_TOKEN__', JSON.stringify(''));
   setApiTokenCookie(req, res);
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.send(html);
+  return res.send(html);
+});
+
+app.get(['/legacy', '/legacy/index.html'], (req, res, next) => {
+  const legacyIndex = path.join(__dirname, 'public', 'index.html');
+  if (!fs.existsSync(legacyIndex)) return next();
+  let html = fs.readFileSync(legacyIndex, 'utf8');
+  html = html.replace('__TUNNEL_API_TOKEN__', JSON.stringify(''));
+  setApiTokenCookie(req, res);
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  return res.send(html);
 });
 
 app.get(['/app', '/app/*'], (req, res, next) => {
