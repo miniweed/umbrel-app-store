@@ -389,9 +389,18 @@ app.get(['/app', '/app/*'], (req, res, next) => {
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 function ensureDataDir() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  } catch (err) {
+    console.error(`[warn] could not prepare data dir ${DATA_DIR}: ${err.message}`);
+    return;
+  }
   if (!fs.existsSync(CADDYFILE)) {
-    fs.writeFileSync(CADDYFILE, DEFAULT_CADDYFILE);
+    try {
+      fs.writeFileSync(CADDYFILE, DEFAULT_CADDYFILE);
+    } catch (err) {
+      console.error(`[warn] could not initialize ${CADDYFILE}: ${err.message}`);
+    }
   }
 }
 
