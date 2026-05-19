@@ -4,7 +4,7 @@ name: Tunnel
 tagline: Expón tu servidor al mundo sin tocar el router
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.png
 category: networking
-version: "1.6.14"
+version: "1.6.15"
 port: 3016
 description: >-
   Conecta tu Umbrel a un VPS propio y expón servicios a internet sin abrir puertos
@@ -17,6 +17,6 @@ repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
 releaseNotes: >-
-  Avanzada la adopción de tipado OpenAPI en la SPA (estado normalizado y payloads de configuración), con actualización de imagen `web` a `1.6.14`.
+  Release de verificación: tests ejecutados con `--detectOpenHandles` sin fugas detectadas y validación de estabilidad de runtime. Actualización de imagen `web` a `1.6.15`.
 dependencies: []
 defaultPassword: ""
