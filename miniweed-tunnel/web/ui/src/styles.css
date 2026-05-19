@@ -119,6 +119,21 @@ label {
   margin-bottom: 4px;
 }
 
+.label-required-missing {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.label-required-ok {
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.input-required-missing {
+  border-color: #e2a6a6;
+  background: #fff3f3;
+}
+
 .actions-row {
   display: flex;
   gap: 8px;

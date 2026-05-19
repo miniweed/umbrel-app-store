@@ -86,6 +86,9 @@ export function App() {
   const [loginPassword, setLoginPassword] = useState('');
 
   const setupIncomplete = !cfg.publicKey || !cfg.vpsPubKey || !cfg.vpsIp;
+  const scriptMissingPublicKey = !cfg.publicKey;
+  const scriptMissingVpsIp = !(cfg.vpsIp || '').trim();
+  const scriptPrereqMissing = scriptMissingPublicKey || scriptMissingVpsIp;
 
   async function refreshStatusOnly() {
     try {
@@ -478,8 +481,10 @@ export function App() {
       <>
         <section className="panel">
           <h2>Claves WireGuard</h2>
-          <label>Clave publica de Umbrel</label>
-          <input value={cfg.publicKey || ''} readOnly />
+          <label className={scriptMissingPublicKey ? 'label-required-missing' : 'label-required-ok'}>
+            Clave publica de Umbrel (requerido para script)
+          </label>
+          <input className={scriptMissingPublicKey ? 'input-required-missing' : ''} value={cfg.publicKey || ''} readOnly />
           <div className="actions-row">
             <button className="btn btn-primary" onClick={onGenerateKeys} disabled={loading}>Generar nuevas claves</button>
           </div>
@@ -487,8 +492,20 @@ export function App() {
 
         <section className="panel">
           <h2>Servidor VPS</h2>
-          <label>IP publica del VPS</label>
-          <input value={cfg.vpsIp || ''} onInput={e => setField('vpsIp', e.currentTarget.value)} placeholder="123.45.67.89" />
+          {scriptPrereqMissing ? (
+            <div className="alert alert-warn">
+              Para generar el script, completa los campos marcados en rojo.
+            </div>
+          ) : null}
+          <label className={scriptMissingVpsIp ? 'label-required-missing' : 'label-required-ok'}>
+            IP publica del VPS (requerido para script)
+          </label>
+          <input
+            className={scriptMissingVpsIp ? 'input-required-missing' : ''}
+            value={cfg.vpsIp || ''}
+            onInput={e => setField('vpsIp', e.currentTarget.value)}
+            placeholder="123.45.67.89"
+          />
           <label>Puerto WireGuard del VPS</label>
           <input type="number" value={cfg.vpsPort || 51820} onInput={e => setField('vpsPort', e.currentTarget.value)} min="1" max="65535" />
           <label>Clave publica del VPS</label>
