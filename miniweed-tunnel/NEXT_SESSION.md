@@ -6,7 +6,7 @@ Last updated: 2026-05-19
 
 - Branch: `main`
 - Working tree at handoff: clean
-- Latest pushed commit: `267408a`
+- Latest pushed commit: `cefc559`
 
 ## What was completed in this chat
 
@@ -14,83 +14,57 @@ Last updated: 2026-05-19
 
 1. `8721702` - Add multi-VPS failover controls and CrowdSec-ready setup scripts
 2. `267408a` - Strengthen non-provider failover checks and CrowdSec operations
+3. `8e5518f` - Document full session handoff and add quick pointer
+4. `cfe78d4` - Add SPA scaffold and typed API contract pipeline
+5. `713feda` - Improve test/server lifecycle cleanup and quieter Jest output
+6. `19e397a` - Migrate core legacy UI flows into SPA frontend
+7. `bf0053c` - Refine SPA parity with legacy UI behaviors
+8. `cefc559` - Serve SPA as default UI with legacy fallback route
 
-### P4-20 Multi-VPS / failover implemented
+### P4-20 + P4-21 (without provider API)
 
-- Config model extended for multiple targets:
-  - `vpsTargets[]`
-  - `activeVpsId`
-- Legacy compatibility kept:
-  - old `vpsIp`/`vpsPort`/`vpsPubKey` are normalized into targets
-  - active target is mirrored back into legacy fields for compatibility
-- WireGuard generation now uses active target dynamically.
-- Rotation flow now binds to active target (`buildVpsRotateScript(..., activeTarget)`).
-- Health and failover strategy added:
-  - per-target health probes
-  - streak-based stability: `okStreak` and `failStreak`
-  - thresholds and anti-flapping cooldown:
-    - `FAILOVER_ACTIVE_FAILURES_REQUIRED=2`
-    - `FAILOVER_CANDIDATE_SUCCESSES_REQUIRED=2`
-    - `FAILOVER_COOLDOWN_MS=120000`
-- Probe strategy without VPS provider API:
-  - TCP reachability checks (`22`, fallback `443`) via `net.Socket`
-- DNS health check aligns against current active target IP.
-
-### P4-20 API + UI delivered
-
-- New/updated API behavior:
+- Multi-VPS model in backend (`vpsTargets[]`, `activeVpsId`) with legacy field compatibility.
+- Failover implemented with health probes and anti-flapping thresholds/cooldown.
+- Endpoints delivered:
   - `GET /api/vps/targets`
-  - `POST /api/vps/failover` (auto if no `targetId`, manual if provided)
+  - `POST /api/vps/failover`
   - `GET /api/vps-setup-script?vpsId=...&withCrowdsec=1`
-- `GET /api/config` now includes target context and fingerprints per target.
-- UI (`web/public/index.html`) now includes:
-  - management of additional VPS targets
-  - target selector for setup script generation
-  - CrowdSec toggle for generated setup script
-  - manual failover and auto-failover trigger controls
-
-### P4-21 CrowdSec implemented (without provider API)
-
-- CrowdSec optional section in generated setup script (`withCrowdsec=1`).
-- Added VPS operational assets:
+- CrowdSec optional setup integrated in generated script (`withCrowdsec=1`).
+- Operational CrowdSec assets delivered:
   - `vps-setup/crowdsec-smoke.sh`
   - `vps-setup/crowdsec-recovery.md`
-- README updated with non-provider CrowdSec workflow.
 
-### Contract and tests improved
+### P3-16 SPA migration and route switch
 
-- Zod config schema expanded for multi-VPS in `web/api-spec/schemas.js`.
-- OpenAPI in `server.js` expanded with:
-  - `VpsTarget`, `VpsTargetsResponse`, `VpsFailoverRequest`, `VpsFailoverResponse`, `VpsSetupScriptResponse`
-  - paths for `/api/vps/targets`, `/api/vps/failover`, `/api/vps-setup-script`
-- Integration tests extended in `web/test/api.test.js`:
-  - multi-VPS config + manual failover
-  - setup script response with selected VPS and CrowdSec flag
-  - vps targets health metadata endpoint
-  - openapi contract presence for new failover endpoints/schemas
+- New SPA app under `web/ui/` now includes major parity with legacy tabs/flows:
+  - dashboard/status/services links
+  - config + auth + services + vps setup/failover
+- SPA is now default at `/` and `/index.html` when build exists.
+- Legacy UI kept as fallback route at `/legacy` and `/legacy/index.html`.
 
-## Files touched in this chat
+### P3-17 contract pipeline
 
-- `miniweed-tunnel/web/server.js`
-- `miniweed-tunnel/web/public/index.html`
-- `miniweed-tunnel/web/api-spec/schemas.js`
-- `miniweed-tunnel/web/test/api.test.js`
-- `miniweed-tunnel/README.md`
-- `miniweed-tunnel/vps-setup/crowdsec-smoke.sh` (new)
-- `miniweed-tunnel/vps-setup/crowdsec-recovery.md` (new)
-- `miniweed-tunnel/NEXT_SESSION.md` (this handoff rewrite)
+- Generated OpenAPI runtime snapshot to `web/api-spec/openapi.json`.
+- Generated TypeScript declarations to `web/api-spec/openapi.d.ts`.
+- Added tooling scripts:
+  - `tools/generate-openapi.js`
+  - `tools/check-openapi.js`
+- Added npm scripts in `web/package.json`:
+  - `api:spec`, `api:spec:check`, `api:types`, `api:contract`, `ui:build`, `build`
+
+### Test/runtime hygiene improvements
+
+- Added background timer lifecycle helpers in server (`ensureBackgroundTimers`, `stopBackgroundTimers`).
+- Added explicit test cleanup for server/timers and quieter test logs.
+- Jest warning about open handles may still appear in normal run, but suites pass.
 
 ## Validation performed
 
+- `npm run api:contract` in `miniweed-tunnel/web` -> passing.
+- `npm run ui:build` in `miniweed-tunnel/web` -> passing.
 - `npm test -- --runInBand` in `miniweed-tunnel/web` -> passing (18 tests).
 - `python3 -m py_compile miniweed-tunnel/wg-client/wg-api.py` -> passing.
-- `shellcheck` run on:
-  - `miniweed-tunnel/wg-client/entrypoint.sh`
-  - `miniweed-tunnel/wg-client/scripts/killswitch.sh`
-  - `miniweed-tunnel/vps-setup/killswitch-service.sh`
-  - `miniweed-tunnel/vps-setup/crowdsec-smoke.sh`
-
-Note: Jest still reports open handles after tests complete (known behavior from server timers).
+- `shellcheck` run on critical scripts in prior phase -> passing.
 
 ## Plan status vs `MEJORAS_SIN_DEPLOY.md`
 
@@ -99,26 +73,31 @@ Note: Jest still reports open handles after tests complete (known behavior from 
 - P0-1, P0-2, P0-3, P0-3-bis
 - P1-4, P1-5, P1-6, P1-7, P1-8
 - P2-9, P2-10, P2-11, P2-12
-- P3-13, P3-14 (repo-level CI exists), P3-15
+- P3-13, P3-14, P3-15
+- P3-16 mostly implemented (SPA now default, legacy fallback kept)
+- P3-17 mostly implemented (OpenAPI + generated types + scripts)
 - P4-18, P4-19
 - P4-20 largely implemented
-- P4-21 partially-to-strongly implemented without provider API (script + smoke + recovery)
+- P4-21 partially-to-strongly implemented without provider API
 
 ### Still pending / next high-value work
 
-1. P3-16: SPA frontend with build pipeline (current UI is still static `index.html`).
-2. P3-17: complete typed API contract pipeline (single source + generated artifacts).
+1. P3-16 parity final pass:
+   - minor UX/message parity details vs legacy
+   - decide removal timeline for legacy route
+2. P3-17 hardening:
+   - consume generated `openapi.d.ts` types deeply in SPA client code
+   - optional CI check on `api:spec:check`
 3. P4-20 hardening pass:
-   - more failover edge-case tests (flapping, tie-breaks, recovery)
-   - optional persistence/telemetry of failover state.
+   - extra failover edge-case tests (flapping/tie-break/recovery)
 4. P4-21 hardening pass:
-   - deeper bouncer/firewall interaction checks in docs/tests.
+   - deeper CrowdSec bouncer/firewall checks in docs/tests
 5. Test hygiene:
-   - address Jest open-handles warning cleanly.
+   - investigate remaining Jest open-handle warning to fully silence
 
 ## Suggested resume point
 
 When resuming, start from:
 
 - `miniweed-tunnel/NEXT_SESSION.md`
-- `MEJORAS_SIN_DEPLOY.md` (focus P3-16 and P3-17 first)
+- `MEJORAS_SIN_DEPLOY.md` (focus P3-17 hardening + P4 edge-case hardening)
