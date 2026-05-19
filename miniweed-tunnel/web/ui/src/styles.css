@@ -7,6 +7,8 @@
   --accent-strong: #125c6a;
   --line: #d8d9dd;
   --danger: #a03232;
+  --warn: #9b5b18;
+  --ok: #1d7548;
 }
 
 * {
@@ -65,6 +67,7 @@ h2 {
   border-radius: 10px;
   padding: 8px 14px;
   cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
 }
 
 .tab.active,
@@ -81,6 +84,7 @@ h2 {
   padding: 16px;
   box-shadow: 0 8px 24px rgba(31, 42, 55, 0.06);
   animation: fade-in 250ms ease;
+  margin-bottom: 14px;
 }
 
 .simple-list {
@@ -95,6 +99,239 @@ h2 {
   padding: 12px;
   overflow: auto;
   max-height: 360px;
+}
+
+input,
+select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  background: #fff;
+  color: var(--ink);
+}
+
+label {
+  display: block;
+  font-size: 0.9rem;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.actions-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.btn-danger {
+  background: #fff2f2;
+  border-color: #e9caca;
+  color: var(--danger);
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: #fff;
+  font-size: 0.9rem;
+}
+
+.status-badge .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #8f9aa6;
+}
+
+.status-badge.connected {
+  border-color: #97d6b7;
+  color: var(--ok);
+}
+
+.status-badge.connected .dot {
+  background: var(--ok);
+}
+
+.status-badge.disconnected {
+  border-color: #e8baba;
+  color: var(--danger);
+}
+
+.status-badge.disconnected .dot {
+  background: var(--danger);
+}
+
+.status-badge.waiting {
+  border-color: #d7ccb8;
+  color: var(--warn);
+}
+
+.status-badge.waiting .dot {
+  background: var(--warn);
+}
+
+.alert {
+  border: 1px solid;
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.alert-success {
+  background: #ebfbf2;
+  border-color: #bde7cf;
+  color: var(--ok);
+}
+
+.alert-error {
+  background: #fff1f1;
+  border-color: #efcccc;
+  color: var(--danger);
+}
+
+.alert-info {
+  background: #edf7ff;
+  border-color: #bfe0f5;
+  color: #1a5f86;
+}
+
+.alert-warn {
+  background: #fff7ec;
+  border-color: #f1d7ab;
+  color: var(--warn);
+}
+
+.target-card,
+.service-card,
+.list-box {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px;
+  margin-bottom: 10px;
+  background: #fff;
+}
+
+.target-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.target-grid > * {
+  margin-bottom: 0;
+}
+
+.check-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  margin: 0;
+}
+
+.check-inline input {
+  width: auto;
+  margin: 0;
+}
+
+.services-grid {
+  display: flex;
+  flex-direction: column;
+}
+
+.health-pill {
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  padding: 3px 8px;
+  font-size: 0.82rem;
+  color: var(--muted);
+  background: #fbfbfb;
+  align-self: flex-start;
+}
+
+.health-pill.ok {
+  color: var(--ok);
+  border-color: #9ed9bb;
+  background: #ebfbf2;
+}
+
+.health-pill.error {
+  color: var(--danger);
+  border-color: #e8bdbd;
+  background: #fff3f3;
+}
+
+.steps {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--muted);
+}
+
+.steps li {
+  margin-bottom: 5px;
+}
+
+.steps li.done {
+  color: var(--ok);
+}
+
+.service-links {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.service-link-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px dashed var(--line);
+  padding-bottom: 6px;
+}
+
+.list-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+@media (max-width: 860px) {
+  .target-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .shell {
+    padding-top: 16px;
+  }
+
+  .hero {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .service-link-row,
+  .list-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
 
 .text-error {

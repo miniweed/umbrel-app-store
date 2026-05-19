@@ -1,71 +1,691 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
-import { getJson } from './api.js';
-import { Dashboard } from './pages/Dashboard.jsx';
-import { Services } from './pages/Services.jsx';
-import { Setup } from './pages/Setup.jsx';
-import { VpsScript } from './pages/VpsScript.jsx';
+import {
+  addAuthPubkey,
+  getAuthPubkeys,
+  getAuthSessions,
+  getConfig,
+  getStatus,
+  getVpsSetupScript,
+  keygen,
+  login,
+  logout,
+  removeAuthPubkey,
+  revokeAuthSession,
+  saveConfig,
+  setUiPassword,
+  triggerFailover
+} from './api.js';
 
-const TABS = ['dashboard', 'services', 'setup', 'script'];
+const TAB_ITEMS = [
+  { key: 'dashboard', label: 'Panel' },
+  { key: 'config', label: 'Configuracion' },
+  { key: 'services', label: 'Servicios' },
+  { key: 'vps', label: 'Setup VPS' }
+];
+
+const EMPTY_SERVICE = { name: '', subdomain: '', target: '', enabled: true };
+
+function randomId(prefix = 'vps') {
+  return `${prefix}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function serviceKey(svc) {
+  const subdomain = (svc?.subdomain || '').trim().toLowerCase() || '@root';
+  const target = (svc?.target || '').trim().toLowerCase();
+  return `${subdomain}|${target}`;
+}
+
+function formatHealth(health) {
+  if (!health || !health.checked) return { cls: '', text: 'Sin comprobar' };
+  if (health.ok) return { cls: 'ok', text: 'Conectado' };
+  return { cls: 'error', text: 'Sin conexion' };
+}
+
+function normalizeConfig(cfg) {
+  const out = { ...(cfg || {}) };
+  out.vpsTargets = Array.isArray(out.vpsTargets) ? out.vpsTargets : [];
+  out.services = Array.isArray(out.services) ? out.services : [];
+  out.serviceHealth = out.serviceHealth && typeof out.serviceHealth === 'object' ? out.serviceHealth : {};
+  out.activeVpsId = out.activeVpsId || out.vpsTargets[0]?.id || '';
+  return out;
+}
+
+function initialState() {
+  return {
+    publicKey: '',
+    vpsIp: '',
+    vpsPort: 51820,
+    vpsPubKey: '',
+    vpsPubKeyFingerprint: '',
+    vpsTargets: [],
+    activeVpsId: '',
+    domain: '',
+    acmeEmail: '',
+    services: [],
+    serviceHealth: {},
+    auth: { passwordEnabled: false, sessionCount: 0 }
+  };
+}
 
 export function App() {
   const [tab, setTab] = useState('dashboard');
-  const [config, setConfig] = useState({});
-  const [status, setStatus] = useState({ connected: false, raw: '' });
+  const [cfg, setCfg] = useState(initialState());
+  const [status, setStatus] = useState({ connected: false, raw: 'Cargando...' });
+  const [message, setMessage] = useState({ text: '', kind: '' });
+  const [loading, setLoading] = useState(false);
+  const [authMsg, setAuthMsg] = useState('');
+  const [uiPassword, setUiPasswordValue] = useState('');
+  const [pubkeyName, setPubkeyName] = useState('');
+  const [pubkeyValue, setPubkeyValue] = useState('');
+  const [pubkeys, setPubkeys] = useState([]);
+  const [sessions, setSessions] = useState([]);
+  const [vpsScriptWithCrowdsec, setVpsScriptWithCrowdsec] = useState(false);
   const [scriptMeta, setScriptMeta] = useState(null);
-  const [error, setError] = useState('');
+  const [showLogin, setShowLogin] = useState(false);
+  const [loginPassword, setLoginPassword] = useState('');
 
-  async function refresh() {
+  const setupIncomplete = !cfg.publicKey || !cfg.vpsPubKey || !cfg.vpsIp;
+
+  async function refreshStatusOnly() {
     try {
-      const [cfg, stat] = await Promise.all([getJson('/api/config'), getJson('/api/status')]);
-      setConfig(cfg);
-      setStatus(stat);
+      const data = await getStatus();
+      setStatus(data || { connected: false, raw: 'Sin informacion' });
+    } catch {
+      setStatus({ connected: false, raw: 'Error obteniendo estado' });
+    }
+  }
 
-      const activeId = cfg.activeVpsId || '';
-      const scriptPath = activeId ? `/api/vps-setup-script?vpsId=${encodeURIComponent(activeId)}` : '/api/vps-setup-script';
-      const script = await getJson(scriptPath).catch(() => null);
-      setScriptMeta(script);
-      setError('');
+  async function refreshConfigAndRelated() {
+    const loaded = normalizeConfig(await getConfig());
+    setCfg(loaded);
+
+    const [keysRes, sessionsRes] = await Promise.all([
+      getAuthPubkeys().catch(() => ({ pubkeys: [] })),
+      getAuthSessions().catch(() => ({ sessions: [] }))
+    ]);
+    setPubkeys(Array.isArray(keysRes.pubkeys) ? keysRes.pubkeys : []);
+    setSessions(Array.isArray(sessionsRes.sessions) ? sessionsRes.sessions : []);
+  }
+
+  async function refreshAll() {
+    try {
+      setLoading(true);
+      await Promise.all([refreshConfigAndRelated(), refreshStatusOnly()]);
+      setMessage({ text: '', kind: '' });
+      setShowLogin(false);
     } catch (err) {
-      setError(err.message || 'Failed to load data');
+      if (err.status === 401) {
+        setShowLogin(true);
+        setMessage({ text: 'Login requerido para acceder a la UI.', kind: 'error' });
+        return;
+      }
+      setMessage({ text: err.message || 'No se pudo cargar la configuracion.', kind: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadVpsScript() {
+    try {
+      const selectedId = cfg.activeVpsId || '';
+      const data = await getVpsSetupScript({ vpsId: selectedId, withCrowdsec: vpsScriptWithCrowdsec });
+      setScriptMeta(data);
+    } catch {
+      setScriptMeta(null);
     }
   }
 
   useEffect(() => {
-    refresh();
-    const timer = setInterval(refresh, 8000);
+    refreshAll();
+    const timer = setInterval(refreshStatusOnly, 8000);
     return () => clearInterval(timer);
   }, []);
 
-  const content = useMemo(() => {
-    if (tab === 'dashboard') return <Dashboard status={status} error={error} />;
-    if (tab === 'services') return <Services config={config} />;
-    if (tab === 'setup') return <Setup config={config} />;
-    return <VpsScript scriptMeta={scriptMeta} error={error} />;
-  }, [config, error, scriptMeta, status, tab]);
+  useEffect(() => {
+    if (tab === 'vps') loadVpsScript();
+  }, [tab, cfg.activeVpsId, vpsScriptWithCrowdsec]);
+
+  const statusBadge = useMemo(() => {
+    if (status.connected) return { cls: 'connected', text: 'Conectado' };
+    if ((status.peerCount || 0) > 0) return { cls: 'waiting', text: 'Conectando...' };
+    return { cls: 'disconnected', text: 'Sin tunel' };
+  }, [status]);
+
+  function setField(field, value) {
+    setCfg(current => ({ ...current, [field]: value }));
+  }
+
+  function setService(index, field, value) {
+    setCfg(current => {
+      const services = [...current.services];
+      const item = { ...(services[index] || EMPTY_SERVICE), [field]: value };
+      services[index] = item;
+      return { ...current, services };
+    });
+  }
+
+  function addServiceRow() {
+    setCfg(current => ({ ...current, services: [...current.services, { ...EMPTY_SERVICE }] }));
+  }
+
+  function removeServiceRow(index) {
+    setCfg(current => ({
+      ...current,
+      services: current.services.filter((_, i) => i !== index)
+    }));
+  }
+
+  function setTarget(index, field, value) {
+    setCfg(current => {
+      const targets = [...current.vpsTargets];
+      const item = {
+        ...targets[index],
+        id: targets[index]?.id || randomId(),
+        [field]: value
+      };
+      targets[index] = item;
+      return { ...current, vpsTargets: targets };
+    });
+  }
+
+  function addTarget() {
+    setCfg(current => {
+      const targets = [...current.vpsTargets, {
+        id: randomId(),
+        name: `VPS ${current.vpsTargets.length + 1}`,
+        ip: '',
+        port: 51820,
+        pubKey: '',
+        enabled: true,
+        priority: current.vpsTargets.length
+      }];
+      return { ...current, vpsTargets: targets, activeVpsId: current.activeVpsId || targets[0]?.id || '' };
+    });
+  }
+
+  function removeTarget(index) {
+    setCfg(current => {
+      const removed = current.vpsTargets[index];
+      const targets = current.vpsTargets.filter((_, i) => i !== index);
+      const activeVpsId = current.activeVpsId === removed?.id ? (targets[0]?.id || '') : current.activeVpsId;
+      return { ...current, vpsTargets: targets, activeVpsId };
+    });
+  }
+
+  function collectTargets() {
+    const values = (cfg.vpsTargets || [])
+      .map((t, i) => ({
+        id: t.id || randomId(),
+        name: (t.name || `VPS ${i + 1}`).trim(),
+        ip: (t.ip || '').trim(),
+        port: Number.parseInt(t.port, 10) || 51820,
+        pubKey: (t.pubKey || '').trim(),
+        enabled: t.enabled !== false,
+        priority: Number.parseInt(t.priority, 10) || i
+      }))
+      .filter(t => t.ip || t.pubKey);
+
+    if (!values.length && ((cfg.vpsIp || '').trim() || (cfg.vpsPubKey || '').trim())) {
+      values.push({
+        id: 'primary',
+        name: 'VPS principal',
+        ip: (cfg.vpsIp || '').trim(),
+        port: Number.parseInt(cfg.vpsPort, 10) || 51820,
+        pubKey: (cfg.vpsPubKey || '').trim(),
+        enabled: true,
+        priority: 0
+      });
+    }
+    return values;
+  }
+
+  async function onSaveConfig() {
+    setLoading(true);
+    setMessage({ text: '', kind: '' });
+    try {
+      const payload = {
+        vpsIp: (cfg.vpsIp || '').trim(),
+        vpsPort: Number.parseInt(cfg.vpsPort, 10) || 51820,
+        vpsPubKey: (cfg.vpsPubKey || '').trim(),
+        vpsTargets: collectTargets(),
+        activeVpsId: cfg.activeVpsId || '',
+        domain: (cfg.domain || '').trim(),
+        acmeEmail: (cfg.acmeEmail || '').trim(),
+        privateKey: '••••',
+        services: (cfg.services || [])
+          .map(item => ({
+            name: (item.name || '').trim(),
+            subdomain: (item.subdomain || '').trim().toLowerCase(),
+            target: (item.target || '').trim(),
+            enabled: Boolean(item.enabled)
+          }))
+          .filter(item => item.subdomain || item.target)
+      };
+      await saveConfig(payload);
+      await refreshConfigAndRelated();
+      if (tab === 'vps') await loadVpsScript();
+      setMessage({ text: 'Guardado. El tunel se reconfigura automaticamente.', kind: 'success' });
+    } catch (err) {
+      if (Array.isArray(err.payload?.errors) && err.payload.errors.length) {
+        setMessage({ text: `Error: ${err.payload.errors.join(' | ')}`, kind: 'error' });
+      } else {
+        setMessage({ text: err.message || 'Error al guardar.', kind: 'error' });
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onGenerateKeys() {
+    setLoading(true);
+    try {
+      const data = await keygen();
+      setCfg(current => ({ ...current, publicKey: data.publicKey || current.publicKey }));
+      setMessage({ text: 'Claves generadas correctamente.', kind: 'success' });
+    } catch (err) {
+      setMessage({ text: err.message || 'No se pudieron generar las claves.', kind: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onSetPassword() {
+    if (!uiPassword || uiPassword.length < 12) {
+      setAuthMsg('Usa al menos 12 caracteres.');
+      return;
+    }
+    try {
+      await setUiPassword(uiPassword);
+      setUiPasswordValue('');
+      setAuthMsg('Contrasena UI guardada.');
+      await refreshConfigAndRelated();
+    } catch (err) {
+      setAuthMsg(err.message || 'Error al guardar contrasena.');
+    }
+  }
+
+  async function onLogout() {
+    try {
+      await logout();
+      setAuthMsg('Sesion cerrada.');
+      setShowLogin(true);
+      await refreshConfigAndRelated();
+    } catch (err) {
+      setAuthMsg(err.message || 'No se pudo cerrar sesion.');
+    }
+  }
+
+  async function onAddPubkey() {
+    if (!pubkeyName.trim() || !pubkeyValue.trim()) {
+      setAuthMsg('Nombre y clave son obligatorios.');
+      return;
+    }
+    try {
+      await addAuthPubkey(pubkeyName.trim(), pubkeyValue.trim());
+      setPubkeyName('');
+      setPubkeyValue('');
+      setAuthMsg('Clave anadida.');
+      const out = await getAuthPubkeys();
+      setPubkeys(out.pubkeys || []);
+    } catch (err) {
+      setAuthMsg(err.message || 'No se pudo anadir la clave.');
+    }
+  }
+
+  async function onDeletePubkey(id) {
+    try {
+      await removeAuthPubkey(id);
+      const out = await getAuthPubkeys();
+      setPubkeys(out.pubkeys || []);
+    } catch (err) {
+      setAuthMsg(err.message || 'No se pudo eliminar la clave.');
+    }
+  }
+
+  async function onRevokeSession(id) {
+    try {
+      await revokeAuthSession(id);
+      const out = await getAuthSessions();
+      setSessions(out.sessions || []);
+    } catch (err) {
+      setAuthMsg(err.message || 'No se pudo revocar la sesion.');
+    }
+  }
+
+  async function onFailoverAuto() {
+    try {
+      const out = await triggerFailover('');
+      setMessage({
+        text: out.switched
+          ? `Failover aplicado a ${out.next?.name || out.next?.id}`
+          : 'No fue necesario cambiar VPS.',
+        kind: 'success'
+      });
+      await refreshConfigAndRelated();
+      await loadVpsScript();
+    } catch (err) {
+      setMessage({ text: err.message || 'No se pudo ejecutar failover.', kind: 'error' });
+    }
+  }
+
+  async function onFailoverManual() {
+    if (!cfg.activeVpsId) {
+      setMessage({ text: 'Selecciona un VPS.', kind: 'error' });
+      return;
+    }
+    try {
+      const out = await triggerFailover(cfg.activeVpsId);
+      setMessage({ text: `VPS activo: ${out.next?.name || out.activeVpsId}`, kind: 'success' });
+      await refreshConfigAndRelated();
+      await loadVpsScript();
+    } catch (err) {
+      setMessage({ text: err.message || 'No se pudo cambiar de VPS.', kind: 'error' });
+    }
+  }
+
+  async function onCopyScript() {
+    const script = scriptMeta?.script || '';
+    if (!script) return;
+    try {
+      await navigator.clipboard.writeText(script);
+      setMessage({ text: 'Script copiado al portapapeles.', kind: 'success' });
+    } catch {
+      setMessage({ text: 'No se pudo copiar automaticamente.', kind: 'error' });
+    }
+  }
+
+  function onDownloadScript() {
+    const script = scriptMeta?.script || '';
+    if (!script) return;
+    const blob = new Blob([`${script}\n`], { type: 'text/x-shellscript;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = scriptMeta?.filename || 'miniweed-tunnel-vps-setup.sh';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function renderDashboard() {
+    const enabled = (cfg.services || []).filter(s => s.enabled && s.target);
+    const showServices = Boolean(cfg.domain && enabled.length);
+    return (
+      <>
+        {setupIncomplete ? (
+          <div className="alert alert-info">Primera configuracion necesaria. Ve a Configuracion para empezar.</div>
+        ) : null}
+        <section className="panel">
+          <h2>Estado del tunel</h2>
+          <pre className="code-box">{status.raw || 'Sin informacion'}</pre>
+        </section>
+        {showServices ? (
+          <section className="panel">
+            <h2>Servicios expuestos</h2>
+            <div className="service-links">
+              {enabled.map(svc => {
+                const host = svc.subdomain ? `${svc.subdomain}.${cfg.domain}` : cfg.domain;
+                return (
+                  <div key={`${svc.subdomain}-${svc.target}`} className="service-link-row">
+                    <span className="muted">{svc.name || svc.target}</span>
+                    <code>{`https://${host}`}</code>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        ) : null}
+      </>
+    );
+  }
+
+  async function onLoginSubmit(e) {
+    e.preventDefault();
+    if (!loginPassword) return;
+    try {
+      await login(loginPassword);
+      setLoginPassword('');
+      setShowLogin(false);
+      await refreshAll();
+    } catch (err) {
+      setMessage({ text: err.message || 'Login invalido.', kind: 'error' });
+    }
+  }
+
+  function renderConfig() {
+    return (
+      <>
+        <section className="panel">
+          <h2>Claves WireGuard</h2>
+          <label>Clave publica de Umbrel</label>
+          <input value={cfg.publicKey || ''} readOnly />
+          <div className="actions-row">
+            <button className="btn btn-primary" onClick={onGenerateKeys} disabled={loading}>Generar nuevas claves</button>
+          </div>
+        </section>
+
+        <section className="panel">
+          <h2>Servidor VPS</h2>
+          <label>IP publica del VPS</label>
+          <input value={cfg.vpsIp || ''} onInput={e => setField('vpsIp', e.currentTarget.value)} placeholder="123.45.67.89" />
+          <label>Puerto WireGuard del VPS</label>
+          <input type="number" value={cfg.vpsPort || 51820} onInput={e => setField('vpsPort', e.currentTarget.value)} min="1" max="65535" />
+          <label>Clave publica del VPS</label>
+          <input value={cfg.vpsPubKey || ''} onInput={e => setField('vpsPubKey', e.currentTarget.value)} placeholder="Pega aqui la clave publica del VPS" />
+          <p className="muted">{cfg.vpsPubKey ? `Clave VPS sincronizada (${cfg.vpsPubKeyFingerprint || 'sin huella'})` : 'Sin sincronizar'}</p>
+
+          <h3>VPS adicionales / failover</h3>
+          <div className="target-list">
+            {cfg.vpsTargets.length === 0 ? <p className="muted">Sin VPS adicionales</p> : null}
+            {cfg.vpsTargets.map((t, i) => (
+              <div className="target-card" key={t.id || i}>
+                <div className="target-grid">
+                  <input value={t.name || ''} onInput={e => setTarget(i, 'name', e.currentTarget.value)} placeholder="Nombre VPS" />
+                  <input value={t.ip || ''} onInput={e => setTarget(i, 'ip', e.currentTarget.value)} placeholder="IP/host" />
+                  <input type="number" value={t.port || 51820} onInput={e => setTarget(i, 'port', e.currentTarget.value)} min="1" max="65535" />
+                  <input type="number" value={Number.isFinite(t.priority) ? t.priority : i} onInput={e => setTarget(i, 'priority', e.currentTarget.value)} min="0" max="99" />
+                  <label className="check-inline">
+                    <input type="checkbox" checked={t.enabled !== false} onChange={e => setTarget(i, 'enabled', e.currentTarget.checked)} />
+                    Activo
+                  </label>
+                  <button className="btn btn-danger" onClick={() => removeTarget(i)}>Eliminar</button>
+                </div>
+                <input value={t.pubKey || ''} onInput={e => setTarget(i, 'pubKey', e.currentTarget.value)} placeholder="Clave publica VPS" />
+              </div>
+            ))}
+          </div>
+          <div className="actions-row">
+            <button className="btn" onClick={addTarget}>Anadir VPS</button>
+          </div>
+        </section>
+
+        <section className="panel">
+          <h2>Dominio y HTTPS</h2>
+          <label>Dominio principal</label>
+          <input value={cfg.domain || ''} onInput={e => setField('domain', e.currentTarget.value)} placeholder="home.tudominio.com" />
+          <label>Email para Let's Encrypt</label>
+          <input type="email" value={cfg.acmeEmail || ''} onInput={e => setField('acmeEmail', e.currentTarget.value)} placeholder="tu@email.com" />
+        </section>
+
+        <section className="panel">
+          <h2>Autenticacion web</h2>
+          <label>Nueva contrasena (minimo 12 caracteres)</label>
+          <input value={uiPassword} onInput={e => setUiPasswordValue(e.currentTarget.value)} placeholder="Introduce contrasena fuerte" />
+          <div className="actions-row">
+            <button className="btn" onClick={onSetPassword}>Guardar contrasena UI</button>
+            <button className="btn" onClick={onLogout}>Cerrar sesion UI</button>
+          </div>
+
+          <label>Anadir clave publica Ed25519</label>
+          <input value={pubkeyName} onInput={e => setPubkeyName(e.currentTarget.value)} placeholder="Nombre del dispositivo" />
+          <input value={pubkeyValue} onInput={e => setPubkeyValue(e.currentTarget.value)} placeholder="Clave publica base64" />
+          <div className="actions-row">
+            <button className="btn" onClick={onAddPubkey}>Anadir clave publica</button>
+          </div>
+          <div className="list-box">
+            {pubkeys.length === 0 ? <p className="muted">Sin claves registradas</p> : null}
+            {pubkeys.map(item => (
+              <div key={item.id} className="list-row">
+                <span>{item.name} ({item.id})</span>
+                <button className="btn btn-danger" onClick={() => onDeletePubkey(item.id)}>Eliminar</button>
+              </div>
+            ))}
+          </div>
+
+          <div className="list-box">
+            {sessions.length === 0 ? <p className="muted">Sin sesiones activas</p> : null}
+            {sessions.map(s => (
+              <div key={s.id} className="list-row">
+                <span>{s.id}{s.current ? ' (actual)' : ''}</span>
+                <button className="btn btn-danger" onClick={() => onRevokeSession(s.id)}>Revocar</button>
+              </div>
+            ))}
+          </div>
+
+          {authMsg ? <p className="muted">{authMsg}</p> : null}
+        </section>
+
+        <div className="actions-row">
+          <button className="btn btn-primary" onClick={onSaveConfig} disabled={loading}>Guardar configuracion</button>
+        </div>
+      </>
+    );
+  }
+
+  function renderServices() {
+    return (
+      <>
+        <section className="panel">
+          <h2>Servicios a exponer</h2>
+          <p className="muted">Cada servicio necesita subdominio y URL interna.</p>
+          <div className="services-grid">
+            {(cfg.services || []).map((svc, idx) => {
+              const h = formatHealth(cfg.serviceHealth?.[serviceKey(svc)] || null);
+              return (
+                <div key={`${idx}-${svc.subdomain}-${svc.target}`} className="service-card">
+                  <input value={svc.name || ''} onInput={e => setService(idx, 'name', e.currentTarget.value)} placeholder="Nombre" />
+                  <input value={svc.subdomain || ''} onInput={e => setService(idx, 'subdomain', e.currentTarget.value)} placeholder="Subdominio" />
+                  <input value={svc.target || ''} onInput={e => setService(idx, 'target', e.currentTarget.value)} placeholder="http://IP:puerto" />
+                  <label className="check-inline">
+                    <input type="checkbox" checked={Boolean(svc.enabled)} onChange={e => setService(idx, 'enabled', e.currentTarget.checked)} />
+                    Activo
+                  </label>
+                  <span className={`health-pill ${h.cls}`}>{h.text}</span>
+                  <button className="btn btn-danger" onClick={() => removeServiceRow(idx)}>Eliminar</button>
+                </div>
+              );
+            })}
+          </div>
+          <div className="actions-row">
+            <button className="btn" onClick={addServiceRow}>Anadir servicio</button>
+          </div>
+        </section>
+        <div className="actions-row">
+          <button className="btn btn-primary" onClick={onSaveConfig} disabled={loading}>Guardar configuracion</button>
+        </div>
+      </>
+    );
+  }
+
+  function renderVps() {
+    return (
+      <>
+        <section className="panel">
+          <h2>Script de instalacion del VPS</h2>
+          <p className="muted">Ejecuta este script como root en tu VPS.</p>
+          <div className="actions-row">
+            <select value={cfg.activeVpsId || ''} onChange={e => setField('activeVpsId', e.currentTarget.value)}>
+              {(cfg.vpsTargets || []).map(t => (
+                <option key={t.id} value={t.id}>{`${t.name} (${t.ip || 'sin ip'})`}</option>
+              ))}
+            </select>
+            <label className="check-inline">
+              <input type="checkbox" checked={vpsScriptWithCrowdsec} onChange={e => setVpsScriptWithCrowdsec(e.currentTarget.checked)} />
+              Incluir CrowdSec
+            </label>
+            <button className="btn" onClick={loadVpsScript}>Recargar script</button>
+          </div>
+
+          {!scriptMeta ? <div className="alert alert-warn">Configura la IP del VPS y genera las claves primero.</div> : null}
+          {scriptMeta ? (
+            <>
+              <pre className="code-box">{scriptMeta.script}</pre>
+              <p className="muted">SHA-256: <code>{scriptMeta.sha256 || '-'}</code></p>
+              <div className="actions-row">
+                <button className="btn" onClick={onCopyScript}>Copiar script</button>
+                <button className="btn" onClick={onDownloadScript}>Descargar .sh</button>
+              </div>
+            </>
+          ) : null}
+        </section>
+
+        <section className="panel">
+          <h2>Pasos de configuracion</h2>
+          <ol className="steps">
+            <li className={cfg.publicKey ? 'done' : ''}>Generar claves</li>
+            <li className={cfg.publicKey && cfg.vpsIp ? 'done' : ''}>Configurar VPS IP</li>
+            <li className={cfg.publicKey && cfg.vpsIp ? 'done' : ''}>Ejecutar script en el VPS</li>
+            <li className={cfg.publicKey && cfg.vpsIp && cfg.vpsPubKey && cfg.domain && cfg.acmeEmail ? 'done' : ''}>Guardar configuracion y listo</li>
+          </ol>
+          <div className="actions-row">
+            <button className="btn" onClick={onFailoverAuto}>Failover automatico</button>
+            <button className="btn" onClick={onFailoverManual}>Cambiar al VPS seleccionado</button>
+          </div>
+        </section>
+      </>
+    );
+  }
+
+  let content = renderDashboard();
+  if (tab === 'config') content = renderConfig();
+  if (tab === 'services') content = renderServices();
+  if (tab === 'vps') content = renderVps();
 
   return (
     <main className="shell">
       <header className="hero">
         <div>
-          <h1>Umbrel Tunnel SPA</h1>
-          <p className="muted">P3-16 scaffold with live API data.</p>
+          <h1>Umbrel Tunnel</h1>
+          <p className="muted">Interfaz SPA en migracion desde la UI legacy.</p>
         </div>
-        <button className="btn" onClick={refresh}>Refresh</button>
+        <div className={`status-badge ${statusBadge.cls}`}>
+          <span className="dot" />
+          <span>{statusBadge.text}</span>
+        </div>
       </header>
 
       <nav className="tabbar">
-        {TABS.map(name => (
+        {TAB_ITEMS.map(item => (
           <button
-            key={name}
-            className={`tab ${tab === name ? 'active' : ''}`}
-            onClick={() => setTab(name)}
+            key={item.key}
+            className={`tab ${tab === item.key ? 'active' : ''}`}
+            onClick={() => setTab(item.key)}
           >
-            {name}
+            {item.label}
           </button>
         ))}
       </nav>
 
-      {content}
+      {message.text ? <div className={`alert ${message.kind === 'error' ? 'alert-error' : 'alert-success'}`}>{message.text}</div> : null}
+      {loading ? <div className="muted">Cargando...</div> : null}
+      {showLogin ? (
+        <section className="panel">
+          <h2>Login requerido</h2>
+          <p className="muted">Introduce la contrasena de la UI para continuar.</p>
+          <form onSubmit={onLoginSubmit}>
+            <input
+              type="password"
+              value={loginPassword}
+              onInput={e => setLoginPassword(e.currentTarget.value)}
+              placeholder="Contrasena UI"
+            />
+            <div className="actions-row">
+              <button className="btn btn-primary" type="submit">Entrar</button>
+            </div>
+          </form>
+        </section>
+      ) : content}
     </main>
   );
 }
