@@ -272,6 +272,14 @@ export function App() {
     } catch (err) {
       if (Array.isArray(err.payload?.errors) && err.payload.errors.length) {
         setMessage({ text: `Error: ${err.payload.errors.join(' | ')}`, kind: 'error' });
+      } else if (Array.isArray(err.payload?.issues) && err.payload.issues.length) {
+        const detail = err.payload.issues
+          .map(item => {
+            const path = Array.isArray(item?.path) && item.path.length ? `${item.path.join('.')}: ` : '';
+            return `${path}${item?.message || 'validation issue'}`;
+          })
+          .join(' | ');
+        setMessage({ text: `Validation: ${detail}`, kind: 'error' });
       } else {
         setMessage({ text: err.message || 'Error al guardar.', kind: 'error' });
       }

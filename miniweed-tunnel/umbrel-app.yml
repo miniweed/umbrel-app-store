@@ -4,7 +4,7 @@ name: Tunnel
 tagline: Expón tu servidor al mundo sin tocar el router
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.png
 category: networking
-version: "1.6.3"
+version: "1.6.4"
 port: 3016
 description: >-
   Conecta tu Umbrel a un VPS propio y expón servicios a internet sin abrir puertos
@@ -17,6 +17,6 @@ repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
 releaseNotes: >-
-  Hotfix crítico de guardado en configuración: se elimina bloqueo temprano de Zod en `POST /api/config` para permitir setup progresivo real desde SPA (IP + dominio + email), manteniendo validación funcional posterior y mensajes de error detallados para body inválido.
+  Hotfix de diagnóstico en UI: cuando `POST /api/config` devuelve `issues` de validación, ahora la SPA muestra el detalle exacto (campo + mensaje) en vez de solo "validation". Facilita identificar rápidamente qué campo bloquea el guardado.
 dependencies: []
 defaultPassword: ""
