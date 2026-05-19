@@ -59,6 +59,7 @@ Last updated: 2026-05-19
 
 - OpenAPI runtime snapshot and generated TS types are in place and updated.
 - CI drift guard (`api:contract:drift`) is active and enforces contract file sync.
+- CI now also enforces compose wiring guard to prevent regressions where `web` points to stale pinned image instead of local build context (`tools/check-compose-web-build.js`).
 
 ## Validation performed in this phase
 
