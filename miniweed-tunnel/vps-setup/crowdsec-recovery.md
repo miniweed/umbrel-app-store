@@ -22,6 +22,10 @@ sudo iptables -S INPUT | grep -- "--dport 51820"
 ```bash
 sudo systemctl disable crowdsec-firewall-bouncer
 sudo systemctl stop crowdsec-firewall-bouncer
+
+# opcional: limpiar cadenas CrowdSec en iptables para evitar bloqueos residuales
+sudo iptables-save | grep -qi crowdsec && sudo iptables-save > /root/iptables.before.crowdsec.cleanup.rules
+sudo iptables -S | grep -E "CROWDSEC|crowdsec" || true
 ```
 
 ## 4) Re-enable with logs once stable
@@ -30,6 +34,9 @@ sudo systemctl stop crowdsec-firewall-bouncer
 sudo systemctl enable crowdsec crowdsec-firewall-bouncer
 sudo systemctl restart crowdsec crowdsec-firewall-bouncer
 sudo journalctl -u crowdsec -u crowdsec-firewall-bouncer -n 100 --no-pager
+sudo cscli lapi status
+sudo cscli bouncers list
+sudo iptables-save | grep -i crowdsec
 ```
 
 ## 5) Smoke check

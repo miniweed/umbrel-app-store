@@ -175,6 +175,7 @@ El soporte CrowdSec se hace 100% por script local en el VPS, sin integrar APIs d
 - Activación: `withCrowdsec=1` al pedir `vps-setup-script`.
 - Verificación smoke local: `miniweed-tunnel/vps-setup/crowdsec-smoke.sh`.
 - Recuperación ante lockout/bloqueos: `miniweed-tunnel/vps-setup/crowdsec-recovery.md`.
+- El setup intenta validar post-instalación (`systemctl`, `cscli`, hook de `iptables`) y deja advertencias si algo no queda activo.
 
 Smoke check recomendado en VPS:
 

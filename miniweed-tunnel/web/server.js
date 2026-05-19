@@ -964,11 +964,28 @@ function generateVpsScript(cfg, target, options = {}) {
     ? `
 # CrowdSec opcional
 echo "Instalando CrowdSec..."
-curl -s https://install.crowdsec.net | sh
+if ! command -v cscli >/dev/null 2>&1; then
+  curl -fsSL https://install.crowdsec.net | sh
+fi
 apt-get -o DPkg::Lock::Timeout=300 install -y -qq crowdsec crowdsec-firewall-bouncer-iptables
 cscli collections install crowdsecurity/sshd || true
 systemctl enable crowdsec crowdsec-firewall-bouncer >/dev/null 2>&1 || true
 systemctl restart crowdsec crowdsec-firewall-bouncer >/dev/null 2>&1 || true
+for i in 1 2 3 4 5; do
+  if systemctl is-active --quiet crowdsec && systemctl is-active --quiet crowdsec-firewall-bouncer; then
+    break
+  fi
+  sleep 1
+done
+if ! systemctl is-active --quiet crowdsec; then
+  echo "Advertencia: crowdsec no quedo activo"
+fi
+if ! systemctl is-active --quiet crowdsec-firewall-bouncer; then
+  echo "Advertencia: crowdsec-firewall-bouncer no quedo activo"
+fi
+cscli lapi status >/dev/null 2>&1 || echo "Advertencia: cscli no pudo validar LAPI"
+cscli bouncers list >/dev/null 2>&1 || echo "Advertencia: cscli no pudo listar bouncers"
+iptables-save | grep -qi crowdsec || echo "Advertencia: no se detecto hook iptables de CrowdSec"
 `
     : '';
   return `#!/bin/bash

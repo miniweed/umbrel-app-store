@@ -19,4 +19,10 @@ cscli bouncers list | grep -q "firewall-bouncer"
 echo "[crowdsec-smoke] checking iptables hook"
 iptables-save | grep -qi "crowdsec"
 
+echo "[crowdsec-smoke] checking service logs for recent errors"
+if journalctl -u crowdsec -u crowdsec-firewall-bouncer -n 80 --no-pager | grep -Eiq "(failed|error|panic|fatal)"; then
+  echo "[crowdsec-smoke] detected suspicious log lines"
+  exit 1
+fi
+
 echo "[crowdsec-smoke] ok"
