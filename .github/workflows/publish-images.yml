@@ -1,6 +1,6 @@
 name: publish-images
 
-on:
+"on":
   push:
     branches:
       - main
