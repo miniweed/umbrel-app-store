@@ -319,18 +319,29 @@ app.use((req, res, next) => {
   });
   next();
 });
+
+function setApiTokenCookie(req, res) {
+  if (!API_AUTH_TOKEN) return;
+  const secureAttr = req.secure || req.get('x-forwarded-proto') === 'https' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `tunnel_api_token=${encodeURIComponent(API_AUTH_TOKEN)}; Path=/; HttpOnly; SameSite=Strict${secureAttr}`);
+}
+
 app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 
 app.get(['/', '/index.html'], (req, res) => {
   const indexPath = path.join(__dirname, 'public', 'index.html');
   let html = fs.readFileSync(indexPath, 'utf8');
   html = html.replace('__TUNNEL_API_TOKEN__', JSON.stringify(''));
-  if (API_AUTH_TOKEN) {
-    const secureAttr = req.secure || req.get('x-forwarded-proto') === 'https' ? '; Secure' : '';
-    res.setHeader('Set-Cookie', `tunnel_api_token=${encodeURIComponent(API_AUTH_TOKEN)}; Path=/; HttpOnly; SameSite=Strict${secureAttr}`);
-  }
+  setApiTokenCookie(req, res);
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(html);
+});
+
+app.get(['/app', '/app/*'], (req, res, next) => {
+  const spaIndex = path.join(__dirname, 'public', 'app', 'index.html');
+  if (!fs.existsSync(spaIndex)) return next();
+  setApiTokenCookie(req, res);
+  return res.sendFile(spaIndex);
 });
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -1980,8 +1991,33 @@ app.get('/api/openapi.json', (req, res) => {
         post: { summary: 'Update configuration' },
         get: { summary: 'Get configuration' }
       },
+      '/api/status': {
+        get: { summary: 'Get tunnel runtime status' }
+      },
+      '/api/keygen': {
+        get: { summary: 'Generate a new WireGuard key pair' }
+      },
+      '/api/health/refresh': {
+        post: { summary: 'Refresh service and VPS health checks now' }
+      },
       '/api/auth/login': {
         post: { summary: 'Password login' }
+      },
+      '/api/auth/password': {
+        post: { summary: 'Set or rotate UI password' }
+      },
+      '/api/auth/pubkeys': {
+        get: { summary: 'List allowed Ed25519 public keys' },
+        post: { summary: 'Add allowed Ed25519 public key' }
+      },
+      '/api/auth/pubkeys/{id}': {
+        delete: { summary: 'Delete allowed Ed25519 public key' }
+      },
+      '/api/auth/sessions': {
+        get: { summary: 'List active UI sessions' }
+      },
+      '/api/auth/sessions/{id}': {
+        delete: { summary: 'Revoke UI session' }
       },
       '/api/auth/challenge': {
         post: { summary: 'Get challenge for pubkey auth' }

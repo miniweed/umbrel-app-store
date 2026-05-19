@@ -5,13 +5,20 @@
   "scripts": {
     "test": "jest",
     "test:unit": "jest test",
-    "test:integration": "jest test/api.test.js"
+    "test:integration": "jest test/api.test.js",
+    "api:spec": "node tools/generate-openapi.js",
+    "api:spec:check": "node tools/check-openapi.js",
+    "api:types": "openapi-typescript api-spec/openapi.json -o api-spec/openapi.d.ts",
+    "api:contract": "npm run api:spec && npm run api:types",
+    "ui:build": "npm --prefix ui run build",
+    "build": "npm run api:contract && npm run ui:build"
   },
   "dependencies": {
     "express": "^4.18.2",
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "jest": "^29.7.0"
+    "jest": "^29.7.0",
+    "openapi-typescript": "^7.6.1"
   }
 }
