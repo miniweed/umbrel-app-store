@@ -139,6 +139,48 @@ describe('api hardening', () => {
     expect(r.status).toBe(401);
   });
 
+  test('bootstraps persistent app seed when env seed is missing', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'miniweed-web-seed-'));
+    const prevSeed = process.env.APP_SEED;
+    const prevToken = process.env.TUNNEL_API_TOKEN;
+    const prevData = process.env.DATA_DIR;
+    const prevPort = process.env.PORT;
+
+    delete process.env.APP_SEED;
+    delete process.env.TUNNEL_API_TOKEN;
+    process.env.DATA_DIR = tempDir;
+    process.env.PORT = '0';
+
+    jest.resetModules();
+    const mod = require('../server');
+    const s1 = mod.startServer();
+    await new Promise(resolve => s1.on('listening', resolve));
+    await new Promise(resolve => s1.close(resolve));
+    if (typeof mod.stopBackgroundTimers === 'function') mod.stopBackgroundTimers();
+
+    const seedPath = path.join(tempDir, 'app-seed');
+    expect(fs.existsSync(seedPath)).toBe(true);
+    const firstSeed = String(fs.readFileSync(seedPath, 'utf8')).trim();
+    expect(firstSeed.length).toBeGreaterThanOrEqual(32);
+
+    jest.resetModules();
+    const mod2 = require('../server');
+    const s2 = mod2.startServer();
+    await new Promise(resolve => s2.on('listening', resolve));
+    await new Promise(resolve => s2.close(resolve));
+    if (typeof mod2.stopBackgroundTimers === 'function') mod2.stopBackgroundTimers();
+
+    const secondSeed = String(fs.readFileSync(seedPath, 'utf8')).trim();
+    expect(secondSeed).toBe(firstSeed);
+
+    if (prevSeed === undefined) delete process.env.APP_SEED; else process.env.APP_SEED = prevSeed;
+    if (prevToken === undefined) delete process.env.TUNNEL_API_TOKEN; else process.env.TUNNEL_API_TOKEN = prevToken;
+    if (prevData === undefined) delete process.env.DATA_DIR; else process.env.DATA_DIR = prevData;
+    if (prevPort === undefined) delete process.env.PORT; else process.env.PORT = prevPort;
+
+    jest.resetModules();
+  });
+
   test('returns script with sha for authorized call', async () => {
     const payload = JSON.stringify({
       vpsIp: '1.2.3.4',

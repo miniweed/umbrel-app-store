@@ -27,6 +27,7 @@ const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const WG_CONF = path.join(DATA_DIR, 'wg0.conf');
 const CADDYFILE = path.join(DATA_DIR, 'Caddyfile');
 const TOKEN_FILE = path.join(DATA_DIR, 'api-token.enc');
+const APP_SEED_FILE = path.join(DATA_DIR, 'app-seed');
 const HEALTH_FILE = path.join(DATA_DIR, 'health.json');
 const KNOWN_HOSTS_FILE = path.join(DATA_DIR, 'known_hosts.json');
 const ENCRYPTED_FIELDS = ['privateKey', 'presharedKey'];
@@ -470,6 +471,24 @@ function loadOrCreateApiToken() {
 
   console.error('FATAL: APP_SEED/TUNNEL_API_TOKEN missing or too short, cannot initialize API token securely.');
   process.exit(1);
+}
+
+function loadOrCreateAppSeed() {
+  const envSeed = (process.env.APP_SEED || process.env.TUNNEL_API_TOKEN || '').trim();
+  if (envSeed.length >= 32) return envSeed;
+
+  if (fs.existsSync(APP_SEED_FILE)) {
+    try {
+      const stored = String(fs.readFileSync(APP_SEED_FILE, 'utf8') || '').trim();
+      if (stored.length >= 32) return stored;
+    } catch {
+      // Continue to regeneration path.
+    }
+  }
+
+  const generated = crypto.randomBytes(48).toString('base64url');
+  fs.writeFileSync(APP_SEED_FILE, `${generated}\n`, { mode: 0o600 });
+  return generated;
 }
 
 function loadConfig() {
@@ -2368,6 +2387,7 @@ app.get('/api/rotate/:planId', (req, res) => {
 function startServer() {
   ensureDataDir();
   ensureBackgroundTimers();
+  process.env.APP_SEED = loadOrCreateAppSeed();
   API_AUTH_TOKEN = loadOrCreateApiToken();
   migrateConfigIfNeeded();
   refreshHealthSnapshot();
