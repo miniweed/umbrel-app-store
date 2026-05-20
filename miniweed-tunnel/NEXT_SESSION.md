@@ -1,117 +1,68 @@
-# Miniweed Tunnel - Session Handoff (Compacted)
+# Miniweed Tunnel - Session Handoff
 
-Last updated: 2026-05-19
+Last updated: 2026-05-20
 
 ## Current state
 
 - Branch: `main`
-- Working tree at handoff: clean
-- Latest pushed commit: `83fd442`
-- Latest released app version in store: `1.6.0`
+- Latest pushed commit: `32c740b`
+- Latest released app version in store: `1.6.21`
+- Latest web image: `ghcr.io/miniweed/umbrel-tunnel-web:1.6.21`
+- Latest wg image: `ghcr.io/miniweed/umbrel-tunnel-wg:1.0.5`
 
 ## What was completed in this chat
 
-### Commits produced in this phase
+### Releases published in this session
 
-1. `7ed26a4` - Harden API contract typing and CI drift checks
-2. `a8f1dfd` - Extend failover coverage for manual and recovery paths
-3. `b6847e0` - Harden CrowdSec setup verification and recovery guidance
-4. `972b644` - Release miniweed-tunnel 1.5.5 with hardening updates
-5. `5c9d4c3` - Release miniweed-tunnel 1.5.6 with config validation hotfix
-6. `8c8b407` - Release miniweed-tunnel 1.5.7 with required-field UI highlights
-7. `9ac006c` - Harden auth, failover policy, and SPA CSP behavior
-8. `83fd442` - Release miniweed-tunnel 1.6.0 with security hardening
+1. `0dda7f8` - `1.6.16` critical hardening release
+2. `d61d7eb` - `1.6.17` web startup permission hotfix
+3. `78c740c` - `1.6.18` restricted-entrypoint compatibility fix
+4. `4c10991` - `1.6.19` removed `/data/wg-ready` dependency
+5. `324ca6e` - `1.6.20` attempted web UID/GID alignment for Umbrel volumes
+6. `32c740b` - `1.6.21` restored web write compatibility on bind mounts
 
-### Security and architecture hardening delivered
+### Security and robustness changes delivered
 
-- Added formal Zod validation on:
-  - `POST /api/auth/password`
-  - `POST /api/auth/login`
-- Extended config at-rest encryption to include auth-sensitive runtime data:
-  - `auth.passwordHash`
-  - `auth.sessions`
-- Added backward-compatible decrypt/normalize flow so legacy plaintext config still loads.
-- Introduced configurable failover policy via config/API:
-  - `failoverPolicy.activeFailuresRequired`
-  - `failoverPolicy.candidateSuccessesRequired`
-  - `failoverPolicy.cooldownMs`
-  - with sane defaults and validation bounds.
-- CSP tightened by route:
-  - strict CSP for SPA routes (`/`, `/app`, `/app/*`) without `unsafe-inline`
-  - compatibility CSP retained for `/legacy` routes temporarily.
+- Strict IPv4 validation for `vpsIp` and `vpsTargets[].ip` in API schemas.
+- Backup restore now validates `config.json` against `ConfigSchema` and rejects invalid payloads with issues.
+- Added compose hardening:
+  - `cap_drop: [ALL]`
+  - `security_opt: no-new-privileges:true`
+  - least-privilege `cap_add` where needed.
+- Web CSP remains strict for SPA routes (`script-src 'self'`, no `unsafe-inline`).
+- Added error-tolerant data-dir initialization to avoid hard crash if `/data/Caddyfile` cannot be created at boot.
+- Removed fragile cross-container readiness file design:
+  - `wg-client` no longer writes `/data/wg-ready`
+  - `caddy` now waits for `/data/Caddyfile` plus `http://127.0.0.1:8080/status`.
 
-### Product and UX improvements delivered
+### Umbrel install/debug findings validated live
 
-- SPA config tab now highlights required fields for script generation:
-  - Umbrel public key
-  - VPS public IP
-- Setup validation hotfix shipped to avoid false `validation` failures during initial setup with optional empty fields.
+- `1.6.16` and later exposed real-world bind-mount permission edge cases across clean reinstalls.
+- `wg` restart loop root cause was `Permission denied` writing `/data/wg-ready` (now removed in `1.6.19`).
+- `web` keygen/save failures (`EACCES` on `/data/config.json.tmp`) persisted with non-root users on some Umbrel setups.
+- Final compatibility decision in `1.6.21`: run web process as root while keeping dropped capabilities and no-new-privileges.
 
-### P4-20 + P4-21 hardening delivered
+## Validation performed
 
-- Added/expanded failover edge-case tests including manual/auto interplay and recovery paths.
-- CrowdSec setup script hardening:
-  - safer installer invocation
-  - post-install health checks and warnings
-  - improved smoke + recovery docs.
+- Repeatedly ran `npm test -- --runInBand` in `miniweed-tunnel/web`.
+- Latest run status: `31 passed, 31 total`.
+- Built and pushed multi-arch images for:
+  - `web:1.6.17`, `web:1.6.18`, `web:1.6.20`, `web:1.6.21`
+  - `wg:1.0.5`
 
-### Contract and CI status
+## Known remaining concerns
 
-- OpenAPI runtime snapshot and generated TS types are in place and updated.
-- CI drift guard (`api:contract:drift`) is active and enforces contract file sync.
-- CI now also enforces compose wiring guard to prevent regressions where `web` points to stale pinned image instead of local build context (`tools/check-compose-web-build.js`).
+1. Fresh-install flow can still be slow at Umbrel "99%" stage; now observed to recover and finish, but bootstrap latency should be profiled.
+2. Running web as root is a compatibility tradeoff; revisit a safer non-root model once Umbrel volume ownership behavior is characterized across environments.
+3. `NEXT_SESSION.md` is now updated, but root-level analysis docs remain untracked unless intentionally committed.
 
-## Validation performed in this phase
+## Untracked local files at handoff
 
-- `npm test -- --runInBand` in `miniweed-tunnel/web` -> passing (27 tests).
-- `npm run ui:build` in `miniweed-tunnel/web` -> passing.
-- `npm run api:contract` in `miniweed-tunnel/web` -> passing.
-
-## Feedback checklist status (external review)
-
-1. Zod on auth password/login: **DONE**.
-2. CSP `unsafe-inline`: **PARTIAL DONE** (removed for SPA, kept for legacy compatibility).
-3. Session storage plaintext in config: **DONE** (sessions and passwordHash sealed at rest).
-4. Failover thresholds hardcoded: **DONE** (policy configurable via config/API).
-5. MX validation for email: **DONE** (DNS MX lookup is implemented and enforced on config save).
-
-## Plan status vs `MEJORAS_SIN_DEPLOY.md`
-
-### Done enough for now (without provider API)
-
-- P0-1, P0-2, P0-3, P0-3-bis
-- P1-4, P1-5, P1-6, P1-7, P1-8
-- P2-9, P2-10, P2-11, P2-12
-- P3-13, P3-14, P3-15
-- P3-16 mostly implemented (SPA default + legacy fallback)
-- P3-17 strongly advanced (contract generation, typed client usage, CI drift guard)
-- P4-18, P4-19
-- P4-20 strongly implemented + additional edge-case coverage
-- P4-21 strongly advanced without provider API
-
-### Still pending / next high-value work
-
-1. P3-16 parity final pass:
-   - remaining minor UX/messaging parity vs legacy
-   - decide and execute legacy route deprecation/removal timeline
-2. P3-17 deep adoption:
-   - deeper end-to-end use of generated types across SPA state/UI boundaries
-3. CSP finalization:
-   - remove `unsafe-inline` from legacy path (or retire legacy route fully)
-4. Test/runtime hygiene:
-   - finish investigation of intermittent Jest open-handle warning (if still seen in some environments)
-5. Optional ops hardening:
-   - expose failover policy controls in SPA UI (currently backend/API-ready)
+- `INFORME_FINAL_MEJORAS_1.6.15.md`
+- `MINIWEED_1.6.15_ANALISIS.md`
 
 ## Suggested resume point
 
-When resuming, start from:
-
-- `miniweed-tunnel/NEXT_SESSION.md`
-- `MEJORAS_SIN_DEPLOY.md`
-
-Suggested immediate focus order:
-
-1. Verify `1.6.0` behavior in Umbrel install/update flow and fresh setup flow.
-2. Final P3-16 parity sweep and legacy route strategy.
-3. CSP full closure (legacy removal or nonce/hash migration).
+1. Validate `1.6.21` on one more clean install path end-to-end (install, keygen, VPS script, tunnel up, exposed service reachable).
+2. Investigate and reduce install-time "99%" delay (service startup dependency timing/logging).
+3. Plan post-hotfix hardening pass to recover non-root web execution without breaking Umbrel bind-mount compatibility.
