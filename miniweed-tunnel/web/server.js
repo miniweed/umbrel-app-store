@@ -1038,6 +1038,9 @@ function generateVpsScript(cfg, target, options = {}) {
     ? `
 # CrowdSec opcional
 echo "Instalando CrowdSec..."
+if ! command -v curl >/dev/null 2>&1; then
+  apt-get -o DPkg::Lock::Timeout=300 install -y -qq curl ca-certificates
+fi
 if ! command -v cscli >/dev/null 2>&1; then
   curl -fsSL https://install.crowdsec.net | sh
 fi

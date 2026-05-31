@@ -352,6 +352,7 @@ describe('api hardening', () => {
     const body = JSON.parse(r.body);
     expect(body.withCrowdsec).toBe(true);
     expect(body.script).toContain('Instalando CrowdSec');
+    expect(body.script).toContain('apt-get -o DPkg::Lock::Timeout=300 install -y -qq curl ca-certificates');
     expect(body.script).toContain('curl -fsSL https://install.crowdsec.net | sh');
     expect(body.script).toContain('cscli lapi status >/dev/null 2>&1 || echo "Advertencia: cscli no pudo validar LAPI"');
     expect(body.script).toContain('iptables-save | grep -qi crowdsec || echo "Advertencia: no se detecto hook iptables de CrowdSec"');
