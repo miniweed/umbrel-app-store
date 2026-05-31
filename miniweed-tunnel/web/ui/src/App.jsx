@@ -68,11 +68,22 @@ function normalizeFailoverPolicy(policy) {
  */
 function normalizeConfig(cfg) {
   const out = { ...(cfg || {}) };
-  out.vpsTargets = Array.isArray(out.vpsTargets) ? out.vpsTargets : [];
+  const rawTargets = Array.isArray(out.vpsTargets) ? out.vpsTargets : [];
+  const primary = rawTargets.find(t => String(t?.id || '').trim() === 'primary') || null;
+  if (!(out.vpsIp || '').trim() && (primary?.ip || '').trim()) out.vpsIp = primary.ip;
+  if (!Number.isFinite(Number.parseInt(out.vpsPort, 10)) && Number.isFinite(Number.parseInt(primary?.port, 10))) out.vpsPort = primary.port;
+  if (!(out.vpsPubKey || '').trim() && (primary?.pubKey || '').trim()) out.vpsPubKey = primary.pubKey;
+  out.vpsTargets = rawTargets.filter(t => String(t?.id || '').trim() !== 'primary');
   out.services = Array.isArray(out.services) ? out.services : [];
   out.serviceHealth = out.serviceHealth && typeof out.serviceHealth === 'object' ? out.serviceHealth : {};
   out.failoverPolicy = normalizeFailoverPolicy(out.failoverPolicy);
-  out.activeVpsId = out.activeVpsId || out.vpsTargets[0]?.id || '';
+  const hasPrimary = Boolean((out.vpsIp || '').trim() || (out.vpsPubKey || '').trim());
+  const availableIds = new Set(out.vpsTargets.map(t => t.id));
+  if (hasPrimary) availableIds.add('primary');
+  const preferred = String(out.activeVpsId || '').trim();
+  out.activeVpsId = availableIds.has(preferred)
+    ? preferred
+    : (hasPrimary ? 'primary' : out.vpsTargets[0]?.id || '');
   return /** @type {ConfigResponse} */ (out);
 }
 
@@ -245,7 +256,22 @@ export function App() {
   }
 
   function collectTargets() {
-    const values = (cfg.vpsTargets || [])
+    const values = [];
+    const primaryIp = (cfg.vpsIp || '').trim();
+    const primaryPubKey = (cfg.vpsPubKey || '').trim();
+    if (primaryIp || primaryPubKey) {
+      values.push({
+        id: 'primary',
+        name: 'VPS principal',
+        ip: primaryIp,
+        port: Number.parseInt(cfg.vpsPort, 10) || 51820,
+        pubKey: primaryPubKey,
+        enabled: true,
+        priority: 0
+      });
+    }
+
+    const additional = (cfg.vpsTargets || [])
       .map((t, i) => ({
         id: t.id || randomId(),
         name: (t.name || `VPS ${i + 1}`).trim(),
@@ -253,21 +279,12 @@ export function App() {
         port: Number.parseInt(t.port, 10) || 51820,
         pubKey: (t.pubKey || '').trim(),
         enabled: t.enabled !== false,
-        priority: Number.parseInt(t.priority, 10) || i
+        priority: Number.parseInt(t.priority, 10) || (i + 1)
       }))
+      .filter(t => t.id !== 'primary')
       .filter(t => t.ip || t.pubKey);
 
-    if (!values.length && ((cfg.vpsIp || '').trim() || (cfg.vpsPubKey || '').trim())) {
-      values.push({
-        id: 'primary',
-        name: 'VPS principal',
-        ip: (cfg.vpsIp || '').trim(),
-        port: Number.parseInt(cfg.vpsPort, 10) || 51820,
-        pubKey: (cfg.vpsPubKey || '').trim(),
-        enabled: true,
-        priority: 0
-      });
-    }
+    values.push(...additional);
     return /** @type {ConfigUpdateRequest['vpsTargets']} */ (values);
   }
 
@@ -717,6 +734,13 @@ export function App() {
   }
 
   function renderVps() {
+    const selectableTargets = [
+      ...(((cfg.vpsIp || '').trim() || (cfg.vpsPubKey || '').trim())
+        ? [{ id: 'primary', name: 'VPS principal', ip: (cfg.vpsIp || '').trim() }]
+        : []),
+      ...(cfg.vpsTargets || [])
+    ];
+
     return (
       <>
         <section className="panel">
@@ -724,7 +748,7 @@ export function App() {
           <p className="muted">Ejecuta este script como root en tu VPS.</p>
           <div className="actions-row">
             <select value={cfg.activeVpsId || ''} onChange={e => setField('activeVpsId', e.currentTarget.value)}>
-              {(cfg.vpsTargets || []).map(t => (
+              {selectableTargets.map(t => (
                 <option key={t.id} value={t.id}>{`${t.name} (${t.ip || 'sin ip'})`}</option>
               ))}
             </select>
