@@ -26,6 +26,7 @@ import {
 const TAB_ITEMS = [
   { key: 'dashboard', label: 'Panel' },
   { key: 'config', label: 'Configuracion' },
+  { key: 'optional', label: 'Configuracion opcional' },
   { key: 'services', label: 'Servicios' },
   { key: 'vps', label: 'Setup VPS' }
 ];
@@ -108,7 +109,7 @@ function initialState() {
 }
 
 export function App() {
-  const [tab, setTab] = useState(/** @type {'dashboard' | 'config' | 'services' | 'vps'} */ ('dashboard'));
+  const [tab, setTab] = useState(/** @type {'dashboard' | 'config' | 'optional' | 'services' | 'vps'} */ ('dashboard'));
   const [cfg, setCfg] = useState(/** @type {ConfigResponse} */ (initialState()));
   const [status, setStatus] = useState(/** @type {StatusResponse} */ ({ connected: false, raw: 'Cargando...' }));
   const [message, setMessage] = useState({ text: '', kind: '' });
@@ -570,7 +571,29 @@ export function App() {
           <label>Clave publica del VPS</label>
           <input value={cfg.vpsPubKey || ''} onInput={e => setField('vpsPubKey', e.currentTarget.value)} placeholder="Pega aqui la clave publica del VPS" />
           <p className="muted">{cfg.vpsPubKey ? `Clave VPS sincronizada (${cfg.vpsPubKeyFingerprint || 'sin huella'})` : 'Sin sincronizar'}</p>
+        </section>
 
+        <section className="panel">
+          <h2>Dominio y HTTPS</h2>
+          <label>Dominio principal</label>
+          <input value={cfg.domain || ''} onInput={e => setField('domain', e.currentTarget.value)} placeholder="home.tudominio.com" />
+          <label>Email para Let's Encrypt</label>
+          <input type="email" value={cfg.acmeEmail || ''} onInput={e => setField('acmeEmail', e.currentTarget.value)} placeholder="tu@email.com" />
+        </section>
+
+        <div className="actions-row">
+          <button className="btn btn-primary" onClick={onSaveConfig} disabled={loading}>Guardar configuracion</button>
+        </div>
+      </>
+    );
+  }
+
+  function renderOptionalConfig() {
+    return (
+      <>
+        <section className="panel">
+          <h2>VPS adicionales y failover</h2>
+          <p className="muted">Aqui configuras nodos de respaldo y la politica de cambio automatico.</p>
           <h3>VPS adicionales / failover</h3>
           <div className="target-list">
             {cfg.vpsTargets.length === 0 ? <p className="muted">Sin VPS adicionales</p> : null}
@@ -580,7 +603,7 @@ export function App() {
                   <input value={t.name || ''} onInput={e => setTarget(i, 'name', e.currentTarget.value)} placeholder="Nombre VPS" />
                   <input value={t.ip || ''} onInput={e => setTarget(i, 'ip', e.currentTarget.value)} placeholder="IP/host" />
                   <input type="number" value={t.port || 51820} onInput={e => setTarget(i, 'port', e.currentTarget.value)} min="1" max="65535" />
-                  <input type="number" value={Number.isFinite(t.priority) ? t.priority : i} onInput={e => setTarget(i, 'priority', e.currentTarget.value)} min="0" max="99" />
+                  <input type="number" value={Number.isFinite(t.priority) ? t.priority : (i + 1)} onInput={e => setTarget(i, 'priority', e.currentTarget.value)} min="0" max="99" />
                   <label className="check-inline">
                     <input type="checkbox" checked={t.enabled !== false} onChange={e => setTarget(i, 'enabled', e.currentTarget.checked)} />
                     Activo
@@ -595,18 +618,8 @@ export function App() {
           <div className="actions-row">
             <button className="btn" onClick={addTarget}>Anadir VPS</button>
           </div>
-        </section>
 
-        <section className="panel">
-          <h2>Dominio y HTTPS</h2>
-          <label>Dominio principal</label>
-          <input value={cfg.domain || ''} onInput={e => setField('domain', e.currentTarget.value)} placeholder="home.tudominio.com" />
-          <label>Email para Let's Encrypt</label>
-          <input type="email" value={cfg.acmeEmail || ''} onInput={e => setField('acmeEmail', e.currentTarget.value)} placeholder="tu@email.com" />
-        </section>
-
-        <section className="panel">
-          <h2>Politica de failover</h2>
+          <h3>Politica de failover</h3>
           <label>Fallos consecutivos del VPS activo para forzar cambio</label>
           <input
             type="number"
@@ -791,6 +804,7 @@ export function App() {
 
   let content = renderDashboard();
   if (tab === 'config') content = renderConfig();
+  if (tab === 'optional') content = renderOptionalConfig();
   if (tab === 'services') content = renderServices();
   if (tab === 'vps') content = renderVps();
 
@@ -799,7 +813,7 @@ export function App() {
       <header className="hero">
         <div>
           <h1>Umbrel Tunnel</h1>
-          <p className="muted">Interfaz SPA en migracion desde la UI legacy.</p>
+          <p className="muted">Canal seguro y failover activo para infraestructura soberana.</p>
         </div>
         <div className={`status-badge ${statusBadge.cls}`}>
           <span className="dot" />
