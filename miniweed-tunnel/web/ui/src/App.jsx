@@ -122,6 +122,8 @@ export function App() {
   const [sessions, setSessions] = useState([]);
   const [vpsScriptWithCrowdsec, setVpsScriptWithCrowdsec] = useState(false);
   const [scriptMeta, setScriptMeta] = useState(/** @type {VpsSetupScriptResponse | null} */ (null));
+  const [scriptReloadMsg, setScriptReloadMsg] = useState('');
+  const [scriptCopied, setScriptCopied] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
   const [loginPassword, setLoginPassword] = useState('');
 
@@ -129,6 +131,9 @@ export function App() {
   const scriptMissingPublicKey = !cfg.publicKey;
   const scriptMissingVpsIp = !(cfg.vpsIp || '').trim();
   const scriptPrereqMissing = scriptMissingPublicKey || scriptMissingVpsIp;
+  const saveSuccessMsg = message.kind === 'success' && message.text.includes('Guardado.')
+    ? message.text
+    : '';
 
   async function refreshStatusOnly() {
     try {
@@ -169,13 +174,21 @@ export function App() {
     }
   }
 
-  async function loadVpsScript() {
+  async function loadVpsScript(source = 'auto') {
     try {
       const selectedId = cfg.activeVpsId || '';
       const data = await getVpsSetupScript({ vpsId: selectedId, withCrowdsec: vpsScriptWithCrowdsec });
       setScriptMeta(data);
+      if (source === 'manual' && vpsScriptWithCrowdsec) {
+        setScriptReloadMsg('Script recargado con CrowdSec');
+      } else {
+        setScriptReloadMsg('');
+      }
+      setScriptCopied(false);
     } catch {
       setScriptMeta(null);
+      setScriptReloadMsg('');
+      setScriptCopied(false);
     }
   }
 
@@ -465,8 +478,11 @@ export function App() {
         if (!ok) throw new Error('copy failed');
       }
       setMessage({ text: 'Script copiado al portapapeles.', kind: 'success' });
+      setScriptCopied(true);
+      window.setTimeout(() => setScriptCopied(false), 2200);
     } catch {
       setMessage({ text: 'No se pudo copiar automaticamente.', kind: 'error' });
+      setScriptCopied(false);
     }
   }
 
@@ -583,6 +599,7 @@ export function App() {
 
         <div className="actions-row">
           <button className="btn btn-primary" onClick={onSaveConfig} disabled={loading}>Guardar configuracion</button>
+          {saveSuccessMsg ? <span className="save-inline-msg">{saveSuccessMsg}</span> : null}
         </div>
       </>
     );
@@ -706,6 +723,7 @@ export function App() {
 
         <div className="actions-row">
           <button className="btn btn-primary" onClick={onSaveConfig} disabled={loading}>Guardar configuracion</button>
+          {saveSuccessMsg ? <span className="save-inline-msg">{saveSuccessMsg}</span> : null}
         </div>
       </>
     );
@@ -741,6 +759,7 @@ export function App() {
         </section>
         <div className="actions-row">
           <button className="btn btn-primary" onClick={onSaveConfig} disabled={loading}>Guardar configuracion</button>
+          {saveSuccessMsg ? <span className="save-inline-msg">{saveSuccessMsg}</span> : null}
         </div>
       </>
     );
@@ -769,7 +788,8 @@ export function App() {
               <input type="checkbox" checked={vpsScriptWithCrowdsec} onChange={e => setVpsScriptWithCrowdsec(e.currentTarget.checked)} />
               Incluir CrowdSec
             </label>
-            <button className="btn" onClick={loadVpsScript}>Recargar script</button>
+            <button className="btn" onClick={() => loadVpsScript('manual')}>Recargar script</button>
+            {scriptReloadMsg ? <span className="script-inline-msg">{scriptReloadMsg}</span> : null}
           </div>
 
           {!scriptMeta ? <div className="alert alert-warn">Configura la IP del VPS y genera las claves primero.</div> : null}
@@ -778,7 +798,16 @@ export function App() {
               <pre className="code-box">{scriptMeta.script}</pre>
               <p className="muted">SHA-256: <code>{scriptMeta.sha256 || '-'}</code></p>
               <div className="actions-row">
-                <button className="btn" onClick={onCopyScript}>Copiar script</button>
+                <button className={`btn ${scriptCopied ? 'btn-success' : ''}`} onClick={onCopyScript}>
+                  {scriptCopied ? (
+                    <span className="btn-copy-feedback">
+                      <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                        <path d="M6.2 11.4 3.3 8.5l-1 1 3.9 3.9L14 5.6l-1-1z" />
+                      </svg>
+                      Copiado
+                    </span>
+                  ) : 'Copiar script'}
+                </button>
                 <button className="btn" onClick={onDownloadScript}>Descargar .sh</button>
               </div>
             </>

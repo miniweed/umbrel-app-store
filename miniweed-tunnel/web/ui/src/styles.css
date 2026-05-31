@@ -110,6 +110,26 @@ h3 {
   box-shadow: 0 0 20px rgba(78, 234, 255, 0.28);
 }
 
+.btn-success,
+.btn-success:hover {
+  border-color: rgba(99, 255, 191, 0.72);
+  background: linear-gradient(130deg, rgba(38, 173, 125, 0.94), rgba(18, 125, 85, 0.94));
+  color: #02190f;
+  box-shadow: 0 0 20px rgba(99, 255, 191, 0.3);
+}
+
+.btn-copy-feedback {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-copy-feedback svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
 .panel {
   background: linear-gradient(170deg, rgba(15, 26, 47, 0.88), rgba(9, 16, 30, 0.9));
   border: 1px solid var(--line);
@@ -188,6 +208,28 @@ label {
   gap: 8px;
   flex-wrap: wrap;
   margin-top: 8px;
+}
+
+.save-inline-msg {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(99, 255, 191, 0.45);
+  background: rgba(12, 46, 36, 0.8);
+  color: var(--ok);
+  font-size: 0.9rem;
+}
+
+.script-inline-msg {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(78, 234, 255, 0.45);
+  background: rgba(7, 36, 46, 0.8);
+  color: #85f1ff;
+  font-size: 0.9rem;
 }
 
 .btn-danger,
