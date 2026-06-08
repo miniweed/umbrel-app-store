@@ -5,6 +5,10 @@ import json
 import time
 import base64
 import hashlib
+import os
+import hmac
+
+EXPECTED_TOKEN = os.environ.get('WG_API_TOKEN', '').strip()
 
 class WGHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -18,7 +22,17 @@ class WGHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def is_authorized(self):
+        if not EXPECTED_TOKEN:
+            return False
+        provided = self.headers.get('x-wg-api-token', '')
+        return hmac.compare_digest(provided, EXPECTED_TOKEN)
+
     def do_GET(self):
+        if not self.is_authorized():
+            self.send_json(401, {'error': 'unauthorized'})
+            return
+
         if self.path == '/keygen':
             priv = subprocess.check_output(['wg', 'genkey']).decode().strip()
             pub = subprocess.check_output(['wg', 'pubkey'], input=priv.encode()).decode().strip()
@@ -95,5 +109,7 @@ class WGHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
+    if not EXPECTED_TOKEN:
+        raise RuntimeError('WG_API_TOKEN is required')
     print('[wg-api] Listening on :8080', flush=True)
     HTTPServer(('0.0.0.0', 8080), WGHandler).serve_forever()

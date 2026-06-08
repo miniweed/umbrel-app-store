@@ -157,6 +157,15 @@ describe('api hardening', () => {
     expect(r.status).toBe(401);
   });
 
+  test('does not issue tunnel_api_token cookie on SPA routes', async () => {
+    const r = await req(port, 'GET', '/');
+    expect(r.status).toBe(200);
+    const setCookie = Array.isArray(r.headers['set-cookie'])
+      ? r.headers['set-cookie'].join(';')
+      : String(r.headers['set-cookie'] || '');
+    expect(setCookie).not.toContain('tunnel_api_token=');
+  });
+
   test('bootstraps persistent app seed when env seed is missing', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'miniweed-web-seed-'));
     const prevSeed = process.env.APP_SEED;
@@ -714,6 +723,48 @@ describe('api hardening', () => {
     expect(body.ok).toBe(true);
   });
 
+  test('rejects config service target to loopback wg helper port', async () => {
+    const payload = JSON.stringify({
+      vpsIp: '1.2.3.4',
+      vpsPort: 51820,
+      vpsPubKey: 'A'.repeat(43) + '=',
+      domain: 'example.com',
+      acmeEmail: 'ops@example.com',
+      privateKey: 'A'.repeat(43) + '=',
+      publicKey: 'B'.repeat(43) + '=',
+      services: [{ name: 'bad', subdomain: 'bad', target: 'http://127.0.0.1:8080', enabled: true }]
+    });
+    const r = await req(port, 'POST', '/api/config', payload, {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(r.status).toBe(400);
+    const body = JSON.parse(r.body);
+    expect(Array.isArray(body.errors)).toBe(true);
+    expect(body.errors.join(' ')).toContain('destino reservado o de control');
+  });
+
+  test('rejects config service target to localhost caddy admin port', async () => {
+    const payload = JSON.stringify({
+      vpsIp: '1.2.3.4',
+      vpsPort: 51820,
+      vpsPubKey: 'A'.repeat(43) + '=',
+      domain: 'example.com',
+      acmeEmail: 'ops@example.com',
+      privateKey: 'A'.repeat(43) + '=',
+      publicKey: 'B'.repeat(43) + '=',
+      services: [{ name: 'bad2', subdomain: 'bad2', target: 'http://localhost:2019', enabled: true }]
+    });
+    const r = await req(port, 'POST', '/api/config', payload, {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(r.status).toBe(400);
+    const body = JSON.parse(r.body);
+    expect(Array.isArray(body.errors)).toBe(true);
+    expect(body.errors.join(' ')).toContain('destino reservado o de control');
+  });
+
   test('validation rejects malformed email', async () => {
     const payload = JSON.stringify({
       vpsIp: '1.2.3.4',
@@ -1098,5 +1149,25 @@ describe('api hardening', () => {
     expect(body.paths['/api/vps/targets']).toBeTruthy();
     expect(body.paths['/api/vps-setup-script']).toBeTruthy();
     expect(body.components.schemas.VpsFailoverResponse).toBeTruthy();
+  });
+
+  test('health internals block forbidden service targets', async () => {
+    const mod = require('../server');
+    expect(mod._internals.isBlockedServiceTarget('http://127.0.0.1:8080')).toBe(true);
+    expect(mod._internals.isBlockedServiceTarget('http://localhost:2019')).toBe(true);
+    expect(mod._internals.isBlockedServiceTarget('http://10.0.0.5:8081')).toBe(false);
+
+    const health = await mod._internals.checkServicesHealth([
+      { enabled: true, subdomain: 'bad', target: 'http://127.0.0.1:8080' },
+      { enabled: true, subdomain: 'ok', target: 'http://10.0.0.5:8081' }
+    ]);
+
+    expect(health['bad|http://127.0.0.1:8080']).toEqual({
+      ok: false,
+      checked: false,
+      message: 'Destino no permitido'
+    });
+    expect(health['ok|http://10.0.0.5:8081'].ok).toBe(false);
+    expect(health['ok|http://10.0.0.5:8081'].message).toBe('Sin conexion');
   });
 });

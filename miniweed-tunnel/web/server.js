@@ -21,6 +21,7 @@ const app = express();
 const DATA_DIR = process.env.DATA_DIR || '/data';
 const WG_API_HOST = process.env.WG_API_HOST || 'wg';
 const WG_API_PORT = 8080;
+const WG_API_TOKEN = String(process.env.WG_API_TOKEN || '').trim();
 let API_AUTH_TOKEN = '';
 let configLock = Promise.resolve();
 const MAX_SERVICES = 64;
@@ -329,16 +330,15 @@ function requireApiAuth(req, res, next) {
     || req.path === '/api/auth/verify'
   ) return next();
   const headerToken = req.get('x-tunnel-api-token') || '';
-  const cookieToken = parseCookies(req).tunnel_api_token || '';
-  const sessionToken = parseCookies(req)[SESSION_COOKIE] || '';
+  const cookies = parseCookies(req);
+  const sessionToken = cookies[SESSION_COOKIE] || '';
   const expected = Buffer.from(String(API_AUTH_TOKEN).padEnd(128).slice(0, 128));
   const headerOk = crypto.timingSafeEqual(Buffer.from(String(headerToken).padEnd(128).slice(0, 128)), expected);
-  const cookieOk = crypto.timingSafeEqual(Buffer.from(String(cookieToken).padEnd(128).slice(0, 128)), expected);
   const cfg = loadConfig();
   const now = Date.now();
   const sessions = Array.isArray(cfg.auth?.sessions) ? cfg.auth.sessions : [];
   const sessionOk = Boolean(sessionToken && sessions.some(s => s.id === sessionToken && s.expiresAt > now));
-  if (!headerOk && !cookieOk && !sessionOk) {
+  if (!headerOk && !sessionOk) {
     audit.log({ action: 'auth.fail', ip: req.ip, path: req.path });
     return res.status(401).json({ error: 'No autorizado' });
   }
@@ -364,25 +364,17 @@ app.use((req, res, next) => {
   next();
 });
 
-function setApiTokenCookie(req, res) {
-  if (!API_AUTH_TOKEN) return;
-  const secureAttr = req.secure || req.get('x-forwarded-proto') === 'https' ? '; Secure' : '';
-  res.setHeader('Set-Cookie', `tunnel_api_token=${encodeURIComponent(API_AUTH_TOKEN)}; Path=/; HttpOnly; SameSite=Strict${secureAttr}`);
-}
-
 app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 
 app.get(['/', '/index.html'], (req, res, next) => {
   const spaIndex = path.join(__dirname, 'public', 'app', 'index.html');
   if (!fs.existsSync(spaIndex)) return next();
-  setApiTokenCookie(req, res);
   return res.sendFile(spaIndex);
 });
 
 app.get(['/app', '/app/*'], (req, res, next) => {
   const spaIndex = path.join(__dirname, 'public', 'app', 'index.html');
   if (!fs.existsSync(spaIndex)) return next();
-  setApiTokenCookie(req, res);
   return res.sendFile(spaIndex);
 });
 
@@ -741,6 +733,26 @@ function normalizeTargetUrl(value) {
   }
 }
 
+function isBlockedServiceTarget(value) {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+    const port = Number.parseInt(parsed.port || (parsed.protocol === 'https:' ? '443' : '80'), 10);
+
+    if (host === 'localhost' || host === '::1' || host === '[::1]') return true;
+    if (host === '0.0.0.0') return true;
+    if (/^127\./.test(host)) return true;
+    if (/^169\.254\./.test(host)) return true;
+
+    const blockedPorts = new Set([2019, 8080, 2375, 2376]);
+    if (blockedPorts.has(port)) return true;
+
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 function validateBody(schema) {
   return (req, res, next) => {
     const parsed = schema.safeParse(req.body);
@@ -925,6 +937,11 @@ async function checkServicesHealth(services) {
       return;
     }
 
+    if (isBlockedServiceTarget(svc.target)) {
+      health[key] = { ok: false, checked: false, message: 'Destino no permitido' };
+      return;
+    }
+
     const result = await probeServiceTarget(svc.target);
     if (result.ok) {
       health[key] = {
@@ -937,7 +954,7 @@ async function checkServicesHealth(services) {
       health[key] = {
         ok: false,
         checked: true,
-        message: `Sin conexion (${result.error || 'error desconocido'})`
+        message: 'Sin conexion'
       };
     }
   }));
@@ -983,6 +1000,9 @@ function validateConfig(cfg) {
   for (const [index, svc] of (cfg.services || []).entries()) {
     if (!isSubdomain(svc.subdomain)) errors.push(`El subdominio del servicio ${index + 1} no es válido`);
     if (svc.target && !isTargetUrl(svc.target)) errors.push(`La URL interna del servicio ${index + 1} no es válida`);
+    if (svc.target && isBlockedServiceTarget(svc.target)) {
+      errors.push(`La URL interna del servicio ${index + 1} apunta a un destino reservado o de control`);
+    }
 
     if (cfg.domain && svc.enabled && svc.target) {
       const host = svc.subdomain ? `${svc.subdomain}.${cfg.domain}`.toLowerCase() : cfg.domain.toLowerCase();
@@ -1016,10 +1036,10 @@ function generateWgConf(cfg) {
 }
 
 function generateCaddyfile(cfg) {
-  const enabled = (cfg.services || []).filter(s => s.enabled && s.target);
+  const enabled = (cfg.services || []).filter(s => s.enabled && s.target && !isBlockedServiceTarget(s.target));
   if (!cfg.domain || !cfg.acmeEmail || !enabled.length) return DEFAULT_CADDYFILE;
 
-  const blocks = [`{\n  email ${cfg.acmeEmail}\n  admin localhost:2019\n}\n`];
+  const blocks = [`{\n  email ${cfg.acmeEmail}\n  admin off\n}\n`];
   for (const svc of enabled) {
     const host = svc.subdomain ? `${svc.subdomain}.${cfg.domain}` : cfg.domain;
     blocks.push(`${host} {\n  reverse_proxy ${svc.target}\n}\n`);
@@ -1384,6 +1404,10 @@ async function computeHealth(cfg) {
       out[key] = { ok: false, checked: false, message: 'Desactivado o incompleto' };
       return;
     }
+    if (isBlockedServiceTarget(svc.target)) {
+      out[key] = { ok: false, checked: false, message: 'Destino no permitido' };
+      return;
+    }
     const dnsHost = cfg.domain ? (svc.subdomain ? `${svc.subdomain}.${cfg.domain}` : cfg.domain) : null;
     const item = { checkedAt: new Date().toISOString() };
     if (dnsHost) {
@@ -1488,7 +1512,13 @@ function restoreBackupPayload(payload, passphrase) {
 function wgApi(urlPath) {
   return new Promise((resolve, reject) => {
     const req = http.request(
-      { hostname: WG_API_HOST, port: WG_API_PORT, path: urlPath, method: 'GET' },
+      {
+        hostname: WG_API_HOST,
+        port: WG_API_PORT,
+        path: urlPath,
+        method: 'GET',
+        headers: WG_API_TOKEN ? { 'x-wg-api-token': WG_API_TOKEN } : {}
+      },
       res => {
         let data = '';
         res.on('data', c => (data += c));
@@ -2998,6 +3028,8 @@ module.exports = {
   stopBackgroundTimers,
   _internals: {
     keyFingerprint,
+    isBlockedServiceTarget,
+    checkServicesHealth,
     validateEmailWithMx,
     buildBackupPayload,
     restoreBackupPayload,
