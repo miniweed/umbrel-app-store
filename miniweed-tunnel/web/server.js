@@ -22,6 +22,7 @@ const DATA_DIR = process.env.DATA_DIR || '/data';
 const WG_API_HOST = process.env.WG_API_HOST || 'wg';
 const WG_API_PORT = 8080;
 const WG_API_TOKEN = String(process.env.WG_API_TOKEN || '').trim();
+const DISABLE_API_AUTH = /^(1|true|yes)$/i.test(String(process.env.DISABLE_API_AUTH || ''));
 let API_AUTH_TOKEN = '';
 let configLock = Promise.resolve();
 const MAX_SERVICES = 64;
@@ -321,6 +322,7 @@ function apiRateLimit(req, res, next) {
 }
 
 function requireApiAuth(req, res, next) {
+  if (DISABLE_API_AUTH) return next();
   if (
     req.path === '/auth/login'
     || req.path === '/api/auth/login'

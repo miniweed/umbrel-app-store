@@ -4,7 +4,7 @@ name: Tunnel
 tagline: Expón tu servidor al mundo sin tocar el router
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.png
 category: networking
-version: "1.6.28"
+version: "1.6.29"
 port: 3016
 description: >-
   Conecta tu Umbrel a un VPS propio y expón servicios a internet sin abrir puertos
@@ -17,6 +17,6 @@ repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
 releaseNotes: >-
-  Endurecimiento de seguridad: se elimina la cookie tunnel_api_token del navegador, la API queda protegida por sesión mw_session o header x-tunnel-api-token, se bloquean targets internos/reservados en servicios, se restringen health checks, se protege wg-api con token interno y se desactiva el admin API de Caddy.
+  Ajuste de acceso para Umbrel: se mantiene el endurecimiento de seguridad interno (bloqueo de targets, token interno para wg-api y Caddy admin off) pero se desactiva el login propio en la UI/API dentro de Umbrel para evitar doble autenticación.
 dependencies: []
 defaultPassword: ""

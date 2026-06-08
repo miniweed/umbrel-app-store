@@ -7,7 +7,7 @@ services:
       PROXY_AUTH_ADD: "true"
 
   web:
-    image: ghcr.io/miniweed/umbrel-tunnel-web:1.6.28
+    image: ghcr.io/miniweed/umbrel-tunnel-web:1.6.29
     restart: on-failure
     stop_grace_period: 30s
     cap_drop:
@@ -20,6 +20,7 @@ services:
       - DATA_DIR=/data
       - WG_API_HOST=wg
       - WG_API_TOKEN=${APP_SEED}
+      - DISABLE_API_AUTH=true
       - PORT=3016
       - APP_SEED=${APP_SEED}
 
