@@ -1,3 +1,5 @@
+version: "3.7"
+
 services:
 
   app_proxy:
@@ -7,7 +9,7 @@ services:
       PROXY_AUTH_ADD: "true"
 
   web:
-    image: ghcr.io/miniweed/umbrel-tunnel-web:1.6.29
+    image: ghcr.io/miniweed/umbrel-tunnel-web:1.6.29@sha256:fce3e8591f17d9dfe26b15dacad8f936fbc62c0b8a50c018cc41bd0ecb818881
     restart: on-failure
     stop_grace_period: 30s
     cap_drop:
@@ -54,7 +56,7 @@ services:
         exec caddy run --config /data/Caddyfile --adapter caddyfile --watch
 
   wg:
-    image: ghcr.io/miniweed/umbrel-tunnel-wg:1.0.5
+    image: ghcr.io/miniweed/umbrel-tunnel-wg:1.0.5@sha256:2cf7981d175c7e459303816e0bd3553846801b8974494a9b48c36d6638017b36
     restart: on-failure
     stop_grace_period: 30s
     cap_drop:

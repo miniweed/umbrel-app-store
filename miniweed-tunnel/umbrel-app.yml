@@ -2,7 +2,6 @@ manifestVersion: 1
 id: miniweed-tunnel
 name: Tunnel
 tagline: Expón tu servidor al mundo sin tocar el router
-icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.png
 category: networking
 version: "1.6.29"
 port: 3016
@@ -16,7 +15,8 @@ website: https://github.com/miniweed/umbrel-app-store
 repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
-releaseNotes: >-
-  Ajuste de acceso para Umbrel: se mantiene el endurecimiento de seguridad interno (bloqueo de targets, token interno para wg-api y Caddy admin off) pero se desactiva el login propio en la UI/API dentro de Umbrel para evitar doble autenticación.
+releaseNotes: ""
 dependencies: []
+path: ""
+defaultUsername: ""
 defaultPassword: ""
