@@ -1,19 +1,19 @@
 :root {
-  --bg-0: #161718;
-  --bg-1: #141515;
-  --bg-2: #101110;
-  --card: rgba(20, 22, 21, 0.9);
-  --card-solid: #171a18;
-  --line: rgba(142, 146, 143, 0.22);
-  --line-strong: rgba(168, 174, 169, 0.42);
-  --ink: #dde2dd;
-  --muted: #98a39b;
-  --accent: #46c26e;
-  --accent-strong: #2f9d52;
-  --ok: #67d38a;
+  --bg-0: #1b1d1d;
+  --bg-1: #181a1a;
+  --bg-2: #141615;
+  --card: rgba(28, 31, 30, 0.9);
+  --card-solid: #212523;
+  --line: rgba(152, 158, 154, 0.2);
+  --line-strong: rgba(176, 184, 179, 0.36);
+  --ink: #e3e7e3;
+  --muted: #aab3ad;
+  --accent: #5baa78;
+  --accent-strong: #4b9468;
+  --ok: #82b895;
   --warn: #c8a86d;
-  --danger: #c65a72;
-  --required: #ff6d9b;
+  --danger: #b07a86;
+  --required: #c68e9c;
   --shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
 }
 
@@ -25,7 +25,7 @@ body {
   margin: 0;
   color: var(--ink);
   font-family: "JetBrains Mono", "IBM Plex Mono", "Fira Code", monospace;
-  background: #161718;
+  background: #1b1d1d;
   min-height: 100vh;
 }
 
@@ -48,7 +48,7 @@ h1 {
   font-size: clamp(1.9rem, 4vw, 2.6rem);
   letter-spacing: 0.02em;
   text-transform: uppercase;
-  text-shadow: 0 0 18px rgba(70, 194, 110, 0.2);
+  text-shadow: 0 0 16px rgba(91, 170, 120, 0.14);
 }
 
 h2,
@@ -101,18 +101,18 @@ h3 {
 .tab.active,
 .btn-primary,
 .btn-primary:hover {
-  border-color: rgba(70, 194, 110, 0.96);
-  background: linear-gradient(130deg, rgba(80, 210, 122, 0.98), rgba(58, 171, 94, 0.98));
-  color: #0b120d;
-  box-shadow: 0 0 22px rgba(70, 194, 110, 0.3);
+  border-color: rgba(91, 170, 120, 0.75);
+  background: linear-gradient(130deg, rgba(99, 168, 123, 0.9), rgba(80, 143, 104, 0.9));
+  color: #121814;
+  box-shadow: 0 0 16px rgba(91, 170, 120, 0.18);
 }
 
 .btn-success,
 .btn-success:hover {
-  border-color: rgba(70, 194, 110, 0.96);
-  background: linear-gradient(130deg, rgba(80, 210, 122, 0.98), rgba(58, 171, 94, 0.98));
-  color: #0b120d;
-  box-shadow: 0 0 22px rgba(70, 194, 110, 0.3);
+  border-color: rgba(91, 170, 120, 0.75);
+  background: linear-gradient(130deg, rgba(99, 168, 123, 0.9), rgba(80, 143, 104, 0.9));
+  color: #121814;
+  box-shadow: 0 0 16px rgba(91, 170, 120, 0.18);
 }
 
 .btn-copy-feedback {
@@ -231,9 +231,9 @@ label {
 
 .btn-danger,
 .btn-danger:hover {
-  background: linear-gradient(135deg, rgba(52, 23, 30, 0.9), rgba(37, 16, 22, 0.9));
-  border-color: rgba(198, 90, 114, 0.6);
-  color: #f4a6bb;
+  background: linear-gradient(135deg, rgba(62, 40, 45, 0.88), rgba(44, 29, 33, 0.88));
+  border-color: rgba(176, 122, 134, 0.5);
+  color: #e0bcc4;
 }
 
 .status-badge {
@@ -262,17 +262,17 @@ label {
 
 .status-badge.connected .dot {
   background: var(--ok);
-  box-shadow: 0 0 8px rgba(110, 148, 122, 0.3);
+  box-shadow: 0 0 7px rgba(130, 184, 149, 0.22);
 }
 
 .status-badge.disconnected {
-  border-color: rgba(255, 109, 155, 0.5);
+  border-color: rgba(176, 122, 134, 0.45);
   color: var(--danger);
 }
 
 .status-badge.disconnected .dot {
   background: var(--danger);
-  box-shadow: 0 0 10px rgba(255, 109, 155, 0.55);
+  box-shadow: 0 0 8px rgba(176, 122, 134, 0.3);
 }
 
 .status-badge.waiting {
@@ -294,15 +294,15 @@ label {
 }
 
 .alert-success {
-  background: rgba(32, 39, 34, 0.76);
-  border-color: rgba(123, 141, 131, 0.34);
+  background: rgba(40, 47, 42, 0.74);
+  border-color: rgba(130, 152, 140, 0.3);
   color: var(--ok);
 }
 
 .alert-error {
-  background: rgba(48, 14, 29, 0.76);
-  border-color: rgba(255, 109, 155, 0.4);
-  color: #ff98bb;
+  background: rgba(63, 34, 42, 0.74);
+  border-color: rgba(176, 122, 134, 0.38);
+  color: #d9b0ba;
 }
 
 .alert-info {
@@ -369,13 +369,13 @@ label {
 .health-pill.ok {
   color: var(--ok);
   border-color: rgba(127, 142, 133, 0.4);
-  background: rgba(31, 39, 33, 0.86);
+  background: rgba(43, 52, 45, 0.82);
 }
 
 .health-pill.error {
   color: var(--danger);
-  border-color: rgba(255, 109, 155, 0.45);
-  background: rgba(58, 17, 34, 0.86);
+  border-color: rgba(176, 122, 134, 0.38);
+  background: rgba(66, 35, 43, 0.82);
 }
 
 .steps {
@@ -415,9 +415,9 @@ label {
 
 .duplicate-badge {
   font-size: 0.75rem;
-  color: #ff98bb;
-  border: 1px solid rgba(255, 109, 155, 0.45);
-  background: rgba(53, 14, 29, 0.78);
+  color: #dcb1bb;
+  border: 1px solid rgba(176, 122, 134, 0.4);
+  background: rgba(62, 33, 41, 0.76);
   border-radius: 999px;
   padding: 2px 8px;
 }
