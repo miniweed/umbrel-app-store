@@ -1,20 +1,11 @@
 const DEFAULT_TIMEOUT_MS = 10_000;
 
-/** @typedef {import('../../api-spec/openapi').components['schemas']['VpsFailoverRequest']} VpsFailoverRequest */
-/** @typedef {import('../../api-spec/openapi').components['schemas']['VpsFailoverResponse']} VpsFailoverResponse */
 /** @typedef {import('../../api-spec/openapi').components['schemas']['VpsSetupScriptResponse']} VpsSetupScriptResponse */
-/** @typedef {import('../../api-spec/openapi').components['schemas']['VpsTargetsResponse']} VpsTargetsResponse */
 /** @typedef {import('../../api-spec/openapi').components['schemas']['ConfigResponse']} ConfigResponse */
 /** @typedef {import('../../api-spec/openapi').components['schemas']['ConfigUpdateRequest']} ConfigUpdateRequest */
 /** @typedef {import('../../api-spec/openapi').components['schemas']['ConfigUpdateResponse']} ConfigUpdateResponse */
 /** @typedef {import('../../api-spec/openapi').components['schemas']['StatusResponse']} StatusResponse */
 /** @typedef {import('../../api-spec/openapi').components['schemas']['KeygenResponse']} KeygenResponse */
-/** @typedef {import('../../api-spec/openapi').components['schemas']['PasswordRequest']} PasswordRequest */
-/** @typedef {import('../../api-spec/openapi').components['schemas']['LoginRequest']} LoginRequest */
-/** @typedef {import('../../api-spec/openapi').components['schemas']['AuthOkResponse']} AuthOkResponse */
-/** @typedef {import('../../api-spec/openapi').components['schemas']['AuthPubkeysResponse']} AuthPubkeysResponse */
-/** @typedef {import('../../api-spec/openapi').components['schemas']['AuthPubkeyAddResponse']} AuthPubkeyAddResponse */
-/** @typedef {import('../../api-spec/openapi').components['schemas']['AuthSessionsResponse']} AuthSessionsResponse */
 
 export async function apiFetch(pathname, options = {}) {
   const controller = new AbortController();
@@ -22,6 +13,7 @@ export async function apiFetch(pathname, options = {}) {
   try {
     const response = await fetch(pathname, {
       credentials: 'same-origin',
+      cache: 'no-store',
       ...options,
       signal: controller.signal,
       headers: {
@@ -91,95 +83,14 @@ export function keygen() {
   return getJson('/api/keygen');
 }
 
-/** @returns {Promise<VpsTargetsResponse>} */
-export function getVpsTargets() {
-  return getJson('/api/vps/targets');
-}
-
 /**
- * @param {string} [targetId]
- * @returns {Promise<VpsFailoverResponse>}
- */
-export function triggerFailover(targetId = '') {
-  /** @type {VpsFailoverRequest} */
-  const payload = targetId ? { targetId } : {};
-  return requestJson('/api/vps/failover', {
-    method: 'POST',
-    body: JSON.stringify(payload)
-  });
-}
-
-/**
- * @param {{ vpsId?: string, withCrowdsec?: boolean }} [options]
+ * @param {{ withCrowdsec?: boolean }} [options]
  * @returns {Promise<VpsSetupScriptResponse>}
  */
-export function getVpsSetupScript({ vpsId = '', withCrowdsec = false } = {}) {
+export function getVpsSetupScript({ withCrowdsec = false } = {}) {
   const qs = new URLSearchParams();
-  if (vpsId) qs.set('vpsId', vpsId);
   if (withCrowdsec) qs.set('withCrowdsec', '1');
+  qs.set('_ts', String(Date.now()));
   const suffix = qs.toString();
   return getJson(`/api/vps-setup-script${suffix ? `?${suffix}` : ''}`);
-}
-
-/**
- * @param {string} password
- * @returns {Promise<AuthOkResponse>}
- */
-export function setUiPassword(password) {
-  /** @type {PasswordRequest} */
-  const payload = { password };
-  return requestJson('/api/auth/password', {
-    method: 'POST',
-    body: JSON.stringify(payload)
-  });
-}
-
-/**
- * @param {string} password
- * @returns {Promise<AuthOkResponse>}
- */
-export function login(password) {
-  /** @type {LoginRequest} */
-  const payload = { password };
-  return requestJson('/api/auth/login', {
-    method: 'POST',
-    body: JSON.stringify(payload)
-  });
-}
-
-/** @returns {Promise<AuthOkResponse>} */
-export function logout() {
-  return requestJson('/api/auth/logout', { method: 'POST' });
-}
-
-/** @returns {Promise<AuthPubkeysResponse>} */
-export function getAuthPubkeys() {
-  return getJson('/api/auth/pubkeys');
-}
-
-/**
- * @param {string} name
- * @param {string} publicKey
- * @returns {Promise<AuthPubkeyAddResponse>}
- */
-export function addAuthPubkey(name, publicKey) {
-  return requestJson('/api/auth/pubkeys', {
-    method: 'POST',
-    body: JSON.stringify({ name, publicKey })
-  });
-}
-
-/** @returns {Promise<AuthOkResponse>} */
-export function removeAuthPubkey(id) {
-  return requestJson(`/api/auth/pubkeys/${encodeURIComponent(id)}`, { method: 'DELETE' });
-}
-
-/** @returns {Promise<AuthSessionsResponse>} */
-export function getAuthSessions() {
-  return getJson('/api/auth/sessions');
-}
-
-/** @returns {Promise<AuthOkResponse>} */
-export function revokeAuthSession(id) {
-  return requestJson(`/api/auth/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }

@@ -9,6 +9,8 @@ const crypto = require('crypto');
 const dns = require('dns');
 const {
   ConfigSchema,
+  AuthPasswordSchema,
+  AuthLoginSchema,
   RotatePrepareSchema,
   RotateConfirmSchema
 } = require('./api-spec/schemas');
@@ -99,6 +101,7 @@ const rateBuckets = {
   '/api/keygen': { max: 5, windowMs: 3_600_000 },
   '/api/vps-setup-script': { max: 10, windowMs: 600_000 },
   '/api/config': { max: 30, windowMs: 60_000 },
+  '/api/auth/login': { max: 5, windowMs: 60_000 },
   '/api/rotate/prepare': { max: 3, windowMs: 300_000 },
   '/api/rotate/confirm': { max: 5, windowMs: 300_000 }
 };
@@ -319,6 +322,31 @@ function apiRateLimit(req, res, next) {
 }
 
 function requireApiAuth(req, res, next) {
+  if (DISABLE_API_AUTH) return next();
+  if (
+    req.path === '/auth/login'
+    || req.path === '/api/auth/login'
+    || req.path === '/auth/challenge'
+    || req.path === '/auth/verify'
+    || req.path === '/api/auth/challenge'
+    || req.path === '/api/auth/verify'
+  ) return next();
+  const headerToken = req.get('x-tunnel-api-token') || '';
+  const cookies = parseCookies(req);
+  const sessionToken = cookies[SESSION_COOKIE] || '';
+  const expected = Buffer.from(String(API_AUTH_TOKEN).padEnd(128).slice(0, 128));
+  const headerOk = crypto.timingSafeEqual(Buffer.from(String(headerToken).padEnd(128).slice(0, 128)), expected);
+  const cfg = loadConfig();
+  const now = Date.now();
+  const sessions = Array.isArray(cfg.auth?.sessions) ? cfg.auth.sessions : [];
+  const sessionOk = Boolean(sessionToken && sessions.some(s => s.id === sessionToken && s.expiresAt > now));
+  if (!headerOk && !sessionOk) {
+    audit.log({ action: 'auth.fail', ip: req.ip, path: req.path });
+    return res.status(401).json({ error: 'No autorizado' });
+  }
+  if (req.path !== '/status') {
+    audit.log({ action: 'auth.success', ip: req.ip, path: req.path });
+  }
   return next();
 }
 
@@ -1405,9 +1433,16 @@ async function computeHealth(cfg) {
 async function refreshHealthSnapshot() {
   try {
     const cfg = loadConfig();
+    const failover = await maybeFailover(cfg, 'health-refresh');
     const health = await computeHealth(cfg);
     fs.writeFileSync(HEALTH_FILE, JSON.stringify({
-      services: health
+      services: health,
+      vps: failover.vpsHealth,
+      failover: {
+        switched: failover.switched,
+        next: failover.next,
+        activeVpsId: cfg.activeVpsId || ''
+      }
     }, null, 2));
   } catch {
     // best effort background task
@@ -1505,7 +1540,9 @@ function wgApi(urlPath) {
 app.get('/api/config', (req, res) => {
   const cfg = loadConfig();
   const active = getActiveVpsTarget(cfg);
+  const failoverPolicy = extractFailoverPolicy(cfg);
   // Never expose private key to the frontend
+  const auth = cfg.auth || { passwordHash: '', sessions: [] };
   res.json({
     ...cfg,
     vpsIp: active?.ip || '',
@@ -1513,6 +1550,11 @@ app.get('/api/config', (req, res) => {
     vpsPubKey: active?.pubKey || '',
     vpsTargets: cfg.vpsTargets || [],
     activeVpsId: cfg.activeVpsId || '',
+    failoverPolicy,
+    auth: {
+      passwordEnabled: Boolean(auth.passwordHash),
+      sessionCount: Array.isArray(auth.sessions) ? auth.sessions.length : 0
+    },
     privateKey: cfg.privateKey ? '••••' : '',
     vpsPubKeyFingerprint: keyFingerprint(active?.pubKey || ''),
     vpsFingerprints: Object.fromEntries((cfg.vpsTargets || []).map(t => [t.id, keyFingerprint(t.pubKey)]))
@@ -1555,6 +1597,9 @@ app.post('/api/config', async (req, res) => {
       if (typeof update.activeVpsId === 'string') {
         cfg.activeVpsId = update.activeVpsId.trim();
       }
+      if (update.failoverPolicy && typeof update.failoverPolicy === 'object') {
+        cfg.failoverPolicy = normalizeFailoverPolicy(update.failoverPolicy);
+      }
       ensureVpsTargets(cfg);
       cfg.services = Array.isArray(cfg.services)
         ? cfg.services.map(svc => ({
@@ -1596,6 +1641,213 @@ app.post('/api/config', async (req, res) => {
   }
 });
 
+app.post('/api/auth/password', validateBody(AuthPasswordSchema), async (req, res) => {
+  const password = String(req.body?.password || '');
+  await withConfigLock(async () => {
+    const cfg = loadConfig();
+    cfg.auth = cfg.auth || {};
+    cfg.auth.passwordHash = hashPassword(password);
+    cfg.auth.sessions = [];
+    saveConfig(cfg);
+  });
+  audit.log({ action: 'auth.password.set', ip: req.ip });
+  return res.json({ ok: true });
+});
+
+app.post('/api/auth/login', validateBody(AuthLoginSchema), async (req, res) => {
+  const password = String(req.body?.password || '');
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+
+  const cfg = loadConfig();
+  const hash = cfg.auth?.passwordHash || '';
+  if (!hash) return res.status(400).json({ error: 'password no configurada' });
+
+  const ok = verifyPassword(password, hash);
+  if (!ok) {
+    const delay = authFailureDelayMs(ip);
+    await new Promise(resolve => setTimeout(resolve, delay));
+    audit.log({ action: 'auth.fail', ip, path: '/api/auth/login' });
+    return res.status(401).json({ error: 'credenciales inválidas' });
+  }
+
+  clearAuthFailures(ip);
+  const now = Date.now();
+  const session = createSession(ip, 'web-password');
+  await withConfigLock(async () => {
+    const current = loadConfig();
+    current.auth = current.auth || {};
+    const sessions = Array.isArray(current.auth.sessions) ? current.auth.sessions : [];
+    current.auth.sessions = sessions
+      .filter(s => s.expiresAt > now)
+      .concat([session]);
+    saveConfig(current);
+  });
+
+  const secureAttr = req.secure || req.get('x-forwarded-proto') === 'https' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${encodeURIComponent(session.id)}; Path=/; HttpOnly; SameSite=Strict${secureAttr}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`);
+  audit.log({ action: 'auth.success', ip, path: '/api/auth/login' });
+  return res.json({ ok: true });
+});
+
+app.get('/api/auth/sessions', (req, res) => {
+  const cfg = loadConfig();
+  const now = Date.now();
+  const sessions = Array.isArray(cfg.auth?.sessions) ? cfg.auth.sessions.filter(s => s.expiresAt > now) : [];
+  const cookies = parseCookies(req);
+  const currentSessionId = cookies[SESSION_COOKIE] || '';
+  return res.json({
+    sessions: sessions.map(s => ({
+      id: s.id,
+      createdAt: s.createdAt,
+      expiresAt: s.expiresAt,
+      ip: s.ip,
+      source: s.source || 'unknown',
+      current: s.id === currentSessionId
+    }))
+  });
+});
+
+app.delete('/api/auth/sessions/:id', async (req, res) => {
+  const sessionId = String(req.params.id || '').trim();
+  if (!sessionId) return res.status(400).json({ error: 'session id requerida' });
+  const now = Date.now();
+  await withConfigLock(async () => {
+    const cfg = loadConfig();
+    cfg.auth = cfg.auth || {};
+    const sessions = Array.isArray(cfg.auth.sessions) ? cfg.auth.sessions : [];
+    cfg.auth.sessions = sessions.filter(s => s.expiresAt > now && s.id !== sessionId);
+    saveConfig(cfg);
+  });
+  audit.log({ action: 'auth.session.revoke', ip: req.ip || req.socket?.remoteAddress || 'unknown', sessionId });
+  return res.json({ ok: true });
+});
+
+app.post('/api/auth/pubkeys', async (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  const inputKey = String(req.body?.publicKey || '').trim();
+  if (!name || !inputKey) return res.status(400).json({ error: 'name y publicKey requeridos' });
+  const publicKey = parseEd25519PublicKey(inputKey);
+  if (!publicKey) {
+    return res.status(400).json({ error: 'publicKey inválida (acepta base64 DER SPKI o ssh-ed25519)' });
+  }
+  const keyObject = crypto.createPublicKey({ key: Buffer.from(publicKey, 'base64'), format: 'der', type: 'spki' });
+  if (keyObject.asymmetricKeyType !== 'ed25519') {
+    return res.status(400).json({ error: 'solo se permiten claves ed25519' });
+  }
+  const keyId = crypto.createHash('sha256').update(publicKey).digest('hex').slice(0, 16);
+  await withConfigLock(async () => {
+    const cfg = loadConfig();
+    cfg.auth = cfg.auth || {};
+    const pubkeys = Array.isArray(cfg.auth.pubkeys) ? cfg.auth.pubkeys : [];
+    const next = pubkeys.filter(p => p.id !== keyId);
+    next.push({ id: keyId, name, publicKey, addedAt: Date.now() });
+    cfg.auth.pubkeys = next;
+    saveConfig(cfg);
+  });
+  audit.log({ action: 'auth.pubkey.add', ip: req.ip || req.socket?.remoteAddress || 'unknown', keyId, name });
+  return res.json({ ok: true, keyId });
+});
+
+app.get('/api/auth/pubkeys', (req, res) => {
+  const cfg = loadConfig();
+  const pubkeys = Array.isArray(cfg.auth?.pubkeys) ? cfg.auth.pubkeys : [];
+  res.json({ pubkeys: pubkeys.map(p => ({ id: p.id, name: p.name, addedAt: p.addedAt })) });
+});
+
+app.delete('/api/auth/pubkeys/:id', async (req, res) => {
+  const keyId = String(req.params.id || '').trim();
+  if (!keyId) return res.status(400).json({ error: 'key id requerida' });
+  await withConfigLock(async () => {
+    const cfg = loadConfig();
+    cfg.auth = cfg.auth || {};
+    const pubkeys = Array.isArray(cfg.auth.pubkeys) ? cfg.auth.pubkeys : [];
+    cfg.auth.pubkeys = pubkeys.filter(p => p.id !== keyId);
+    saveConfig(cfg);
+  });
+  audit.log({ action: 'auth.pubkey.remove', ip: req.ip || req.socket?.remoteAddress || 'unknown', keyId });
+  return res.json({ ok: true });
+});
+
+app.post('/api/auth/challenge', (req, res) => {
+  const keyId = String(req.body?.keyId || '').trim();
+  if (!keyId) return res.status(400).json({ error: 'keyId requerido' });
+  const cfg = loadConfig();
+  const pubkeys = Array.isArray(cfg.auth?.pubkeys) ? cfg.auth.pubkeys : [];
+  const key = pubkeys.find(p => p.id === keyId);
+  if (!key) return res.status(401).json({ error: 'clave no registrada' });
+  const challengeId = crypto.randomBytes(16).toString('hex');
+  const nonce = crypto.randomBytes(32).toString('base64');
+  const now = Date.now();
+  authChallenges.set(challengeId, {
+    keyId,
+    nonce,
+    createdAt: now,
+    expiresAt: now + CHALLENGE_TTL_MS,
+    ip: req.ip || req.socket?.remoteAddress || 'unknown'
+  });
+  return res.json({ challengeId, nonce, expiresInSec: Math.floor(CHALLENGE_TTL_MS / 1000) });
+});
+
+app.post('/api/auth/verify', async (req, res) => {
+  const challengeId = String(req.body?.challengeId || '').trim();
+  const signatureB64 = String(req.body?.signature || '').trim();
+  if (!challengeId || !signatureB64) {
+    return res.status(400).json({ error: 'challengeId y signature requeridos' });
+  }
+  const challenge = authChallenges.get(challengeId);
+  if (!challenge || challenge.expiresAt <= Date.now()) {
+    authChallenges.delete(challengeId);
+    return res.status(401).json({ error: 'challenge expirada o inválida' });
+  }
+  authChallenges.delete(challengeId);
+
+  const cfg = loadConfig();
+  const pubkeys = Array.isArray(cfg.auth?.pubkeys) ? cfg.auth.pubkeys : [];
+  const key = pubkeys.find(p => p.id === challenge.keyId);
+  if (!key) return res.status(401).json({ error: 'clave no encontrada' });
+
+  let verified = false;
+  try {
+    const publicKey = crypto.createPublicKey({ key: Buffer.from(key.publicKey, 'base64'), format: 'der', type: 'spki' });
+    verified = crypto.verify(null, Buffer.from(challenge.nonce, 'base64'), publicKey, Buffer.from(signatureB64, 'base64'));
+  } catch {
+    verified = false;
+  }
+  if (!verified) {
+    audit.log({ action: 'auth.fail', ip: req.ip || req.socket?.remoteAddress || 'unknown', path: '/api/auth/verify' });
+    return res.status(401).json({ error: 'firma inválida' });
+  }
+
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  const session = createSession(ip, `pubkey:${challenge.keyId}`);
+  await withConfigLock(async () => {
+    const current = loadConfig();
+    current.auth = current.auth || {};
+    const now = Date.now();
+    const sessions = Array.isArray(current.auth.sessions) ? current.auth.sessions : [];
+    current.auth.sessions = sessions.filter(s => s.expiresAt > now).concat([session]);
+    saveConfig(current);
+  });
+  audit.log({ action: 'auth.success', ip, path: '/api/auth/verify', keyId: challenge.keyId });
+  return res.json({ ok: true, sessionToken: session.id, expiresAt: session.expiresAt });
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  const cookies = parseCookies(req);
+  const sessionId = cookies[SESSION_COOKIE] || '';
+  const now = Date.now();
+  await withConfigLock(async () => {
+    const cfg = loadConfig();
+    cfg.auth = cfg.auth || {};
+    const sessions = Array.isArray(cfg.auth.sessions) ? cfg.auth.sessions : [];
+    cfg.auth.sessions = sessions.filter(s => s.expiresAt > now && s.id !== sessionId);
+    saveConfig(cfg);
+  });
+  const secureAttr = req.secure || req.get('x-forwarded-proto') === 'https' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict${secureAttr}; Max-Age=0`);
+  audit.log({ action: 'auth.logout', ip: req.ip || req.socket?.remoteAddress || 'unknown' });
+  return res.json({ ok: true });
+});
 
 app.get('/api/keygen', async (req, res) => {
   try {
@@ -1641,6 +1893,45 @@ app.post('/api/health/refresh', async (req, res) => {
   }
 });
 
+app.post('/api/vps/failover', async (req, res) => {
+  const requestedId = String(req.body?.targetId || '').trim();
+  const cfg = loadConfig();
+  ensureVpsTargets(cfg);
+  if (!requestedId) {
+    const result = await maybeFailover(cfg, 'manual-auto');
+    return res.json({
+      ok: true,
+      ...result,
+      activeVpsId: loadConfig().activeVpsId || '',
+      policy: result.policy || extractFailoverPolicy(cfg)
+    });
+  }
+  const target = (cfg.vpsTargets || []).find(t => t.id === requestedId && t.enabled && t.ip && t.pubKey);
+  if (!target) {
+    return res.status(404).json({ error: 'VPS objetivo no encontrado o incompleto' });
+  }
+  cfg.activeVpsId = target.id;
+  ensureVpsTargets(cfg);
+  saveConfig(cfg);
+  const wgConf = generateWgConf(cfg);
+  if (wgConf) fs.writeFileSync(WG_CONF, wgConf);
+  audit.log({ action: 'vps.failover.manual', ip: req.ip, to: target.id, toIp: target.ip });
+  return res.json({ ok: true, switched: true, next: { id: target.id, name: target.name, ip: target.ip }, activeVpsId: cfg.activeVpsId });
+});
+
+app.get('/api/vps/targets', async (req, res) => {
+  const cfg = loadConfig();
+  ensureVpsTargets(cfg);
+  const vpsHealth = await computeVpsHealth(cfg.vpsTargets || []);
+  res.json({
+    activeVpsId: cfg.activeVpsId || '',
+    targets: (cfg.vpsTargets || []).map(t => ({
+      ...t,
+      fingerprint: keyFingerprint(t.pubKey),
+      health: vpsHealth[t.id] || null
+    }))
+  });
+});
 
 app.post('/api/backup', (req, res) => {
   const passphrase = String(req.body?.passphrase || '');
@@ -1709,11 +2000,11 @@ app.post('/api/restore', express.raw({ type: 'application/octet-stream', limit: 
 });
 
 app.get('/api/vps-setup-script', (req, res) => {
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private, max-age=0');
-  res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Expires', '0');
   const cfg = loadConfig();
-  const selected = getActiveVpsTarget(cfg);
+  const targetId = String(req.query.vpsId || '').trim();
+  const selected = targetId
+    ? (cfg.vpsTargets || []).find(t => t.id === targetId)
+    : getActiveVpsTarget(cfg);
   if (!cfg.publicKey || !selected?.ip) {
     return res.status(400).json({ error: 'Configura la IP del VPS y genera las claves primero' });
   }
@@ -2037,12 +2328,115 @@ app.get('/api/openapi.json', (req, res) => {
             peerCount: { type: 'integer' }
           }
         },
-        KeygenResponse: {
+        AuthOkResponse: {
           type: 'object',
-          required: ['publicKey', 'publicKeyFingerprint'],
+          required: ['ok'],
           properties: {
-            publicKey: { type: 'string', pattern: '^[A-Za-z0-9+/]{43}=$' },
-            publicKeyFingerprint: { type: 'string' }
+            ok: { type: 'boolean' }
+          }
+        },
+        PasswordRequest: {
+          type: 'object',
+          required: ['password'],
+          properties: {
+            password: { type: 'string', minLength: 12, maxLength: 256 }
+          }
+        },
+        LoginRequest: {
+          type: 'object',
+          required: ['password'],
+          properties: {
+            password: { type: 'string' }
+          }
+        },
+        AuthSession: {
+          type: 'object',
+          required: ['id', 'createdAt', 'expiresAt', 'ip', 'source', 'current'],
+          properties: {
+            id: { type: 'string' },
+            createdAt: { type: 'integer' },
+            expiresAt: { type: 'integer' },
+            ip: { type: 'string' },
+            source: { type: 'string' },
+            current: { type: 'boolean' }
+          }
+        },
+        AuthSessionsResponse: {
+          type: 'object',
+          required: ['sessions'],
+          properties: {
+            sessions: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/AuthSession' }
+            }
+          }
+        },
+        AuthPubkeyItem: {
+          type: 'object',
+          required: ['id', 'name', 'addedAt'],
+          properties: {
+            id: { type: 'string' },
+            name: { type: 'string' },
+            addedAt: { type: 'integer' }
+          }
+        },
+        AuthPubkeysResponse: {
+          type: 'object',
+          required: ['pubkeys'],
+          properties: {
+            pubkeys: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/AuthPubkeyItem' }
+            }
+          }
+        },
+        AuthPubkeyAddRequest: {
+          type: 'object',
+          required: ['name', 'publicKey'],
+          properties: {
+            name: { type: 'string' },
+            publicKey: { type: 'string' }
+          }
+        },
+        AuthPubkeyAddResponse: {
+          type: 'object',
+          required: ['ok', 'keyId'],
+          properties: {
+            ok: { type: 'boolean' },
+            keyId: { type: 'string' }
+          }
+        },
+        AuthChallengeRequest: {
+          type: 'object',
+          required: ['keyId'],
+          properties: {
+            keyId: { type: 'string' }
+          }
+        },
+        AuthChallengeResponse: {
+          type: 'object',
+          required: ['challengeId', 'nonce', 'expiresInSec'],
+          properties: {
+            challengeId: { type: 'string' },
+            nonce: { type: 'string' },
+            expiresInSec: { type: 'integer' }
+          }
+        },
+        AuthVerifyRequest: {
+          type: 'object',
+          required: ['challengeId', 'signature'],
+          properties: {
+            challengeId: { type: 'string' },
+            signature: { type: 'string' }
+          }
+        },
+        AuthVerifyResponse: {
+          type: 'object',
+          required: ['ok', 'sessionToken', 'expiresAt'],
+          properties: {
+            ok: { type: 'boolean' },
+            sessionToken: { type: 'string' },
+            expiresAt: { type: 'integer' }
           }
         }
       }
@@ -2116,6 +2510,194 @@ app.get('/api/openapi.json', (req, res) => {
       },
       '/api/health/refresh': {
         post: { summary: 'Refresh service and VPS health checks now' }
+      },
+      '/api/auth/login': {
+        post: {
+          summary: 'Password login',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/LoginRequest' }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Session established',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AuthOkResponse' }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/auth/password': {
+        post: {
+          summary: 'Set or rotate UI password',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/PasswordRequest' }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Password configured',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AuthOkResponse' }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/auth/pubkeys': {
+        get: {
+          summary: 'List allowed Ed25519 public keys',
+          responses: {
+            '200': {
+              description: 'Allowed keys',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AuthPubkeysResponse' }
+                }
+              }
+            }
+          }
+        },
+        post: {
+          summary: 'Add allowed Ed25519 public key',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/AuthPubkeyAddRequest' }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Key registered',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AuthPubkeyAddResponse' }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/auth/pubkeys/{id}': {
+        delete: {
+          summary: 'Delete allowed Ed25519 public key',
+          responses: {
+            '200': {
+              description: 'Key deleted',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AuthOkResponse' }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/auth/sessions': {
+        get: {
+          summary: 'List active UI sessions',
+          responses: {
+            '200': {
+              description: 'Active sessions',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AuthSessionsResponse' }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/auth/sessions/{id}': {
+        delete: {
+          summary: 'Revoke UI session',
+          responses: {
+            '200': {
+              description: 'Session revoked',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AuthOkResponse' }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/auth/logout': {
+        post: {
+          summary: 'Logout current session',
+          responses: {
+            '200': {
+              description: 'Session removed',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AuthOkResponse' }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/auth/challenge': {
+        post: {
+          summary: 'Get challenge for pubkey auth',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/AuthChallengeRequest' }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Challenge generated',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AuthChallengeResponse' }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/auth/verify': {
+        post: {
+          summary: 'Verify challenge signature and issue session',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/AuthVerifyRequest' }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Signature accepted and session issued',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/AuthVerifyResponse' }
+                }
+              }
+            }
+          }
+        }
       },
       '/api/rotate/prepare': {
         post: {
@@ -2201,10 +2783,54 @@ app.get('/api/openapi.json', (req, res) => {
           }
         }
       },
+      '/api/vps/targets': {
+        get: {
+          summary: 'List VPS targets with health and active target',
+          responses: {
+            '200': {
+              description: 'VPS targets and current active target',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/VpsTargetsResponse' }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/vps/failover': {
+        post: {
+          summary: 'Trigger automatic failover or force specific target',
+          requestBody: {
+            required: false,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/VpsFailoverRequest' }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Failover result',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/VpsFailoverResponse' }
+                }
+              }
+            }
+          }
+        }
+      },
       '/api/vps-setup-script': {
         get: {
-          summary: 'Generate setup script for current VPS target',
+          summary: 'Generate setup script for selected VPS target',
           parameters: [
+            {
+              in: 'query',
+              name: 'vpsId',
+              required: false,
+              schema: { type: 'string' }
+            },
             {
               in: 'query',
               name: 'withCrowdsec',
