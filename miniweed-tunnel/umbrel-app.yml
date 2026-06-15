@@ -3,7 +3,7 @@ id: miniweed-tunnel
 name: Tunnel
 tagline: Expón tu servidor al mundo sin tocar el router
 category: networking
-version: "1.6.29"
+version: "1.6.30"
 port: 3016
 description: >-
   Conecta tu Umbrel a un VPS propio y expón servicios a internet sin abrir puertos
