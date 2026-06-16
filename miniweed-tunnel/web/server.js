@@ -14,67 +14,66 @@ const {
   AuthPasswordSchema,
   AuthLoginSchema
 } = require('./api-spec/schemas');
+const openApiDoc = require('./api-spec/openapi-runtime');
+const {
+  isWireGuardKey,
+  keyFingerprint,
+  isHostname,
+  isSubdomain,
+  isEmail,
+  isValidIpv4,
+  safeTunnelIp,
+  isTargetUrl,
+  normalizeTargetUrl,
+  isDisallowedTargetIp,
+  isBlockedServiceTarget
+} = require('./lib/validation');
+const {
+  generateWgConf,
+  generateCaddyfile,
+  generateVpsScript,
+  buildKillSwitchScript,
+  buildVpsRotateScript
+} = require('./lib/generators');
 const { seal, open, isSealed } = require('./lib/cryptobox');
 const audit = require('./lib/audit');
 
+const {
+  DATA_DIR,
+  WG_API_HOST,
+  WG_API_PORT,
+  WG_API_TOKEN,
+  DISABLE_API_AUTH,
+  MAX_SERVICES,
+  MAX_VPS_TARGETS,
+  FAILOVER_POLICY_DEFAULTS,
+  CONFIG_FILE,
+  WG_CONF,
+  CADDYFILE,
+  TOKEN_FILE,
+  APP_SEED_FILE,
+  HEALTH_FILE,
+  KNOWN_HOSTS_FILE,
+  ENCRYPTED_FIELDS,
+  SESSION_COOKIE,
+  SESSION_TTL_MS,
+  CHALLENGE_TTL_MS,
+  ROTATION_PLAN_TTL_MS,
+  DEFAULT_CONFIG,
+  DEFAULT_CADDYFILE
+} = require('./config/constants');
+
 const app = express();
-const DATA_DIR = process.env.DATA_DIR || '/data';
-const WG_API_HOST = process.env.WG_API_HOST || 'wg';
-const WG_API_PORT = 8080;
-const WG_API_TOKEN = String(process.env.WG_API_TOKEN || '').trim();
-const DISABLE_API_AUTH = /^(1|true|yes)$/i.test(String(process.env.DISABLE_API_AUTH || ''));
+
+// Estado mutable en memoria (no constantes): tokens runtime, lock de config,
+// y los Maps de control de sesiones/challenges/rotación/failover.
 let API_AUTH_TOKEN = '';
 let configLock = Promise.resolve();
-const MAX_SERVICES = 64;
-const MAX_VPS_TARGETS = 8;
-const FAILOVER_POLICY_DEFAULTS = {
-  activeFailuresRequired: 2,
-  candidateSuccessesRequired: 2,
-  cooldownMs: 2 * 60 * 1000
-};
-
-const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
-const WG_CONF = path.join(DATA_DIR, 'wg0.conf');
-const CADDYFILE = path.join(DATA_DIR, 'Caddyfile');
-const TOKEN_FILE = path.join(DATA_DIR, 'api-token.enc');
-const APP_SEED_FILE = path.join(DATA_DIR, 'app-seed');
-const HEALTH_FILE = path.join(DATA_DIR, 'health.json');
-const KNOWN_HOSTS_FILE = path.join(DATA_DIR, 'known_hosts.json');
-const ENCRYPTED_FIELDS = ['privateKey', 'presharedKey'];
-const SESSION_COOKIE = 'mw_session';
-const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const loginFailures = new Map();
 const authChallenges = new Map();
-const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const rotationPlans = new Map();
-const ROTATION_PLAN_TTL_MS = 30 * 60 * 1000;
 const failoverState = new Map();
 let failoverLastSwitchAt = 0;
-
-const DEFAULT_CONFIG = {
-  privateKey: '',
-  publicKey: '',
-  presharedKey: '',
-  vpsIp: '',
-  vpsPort: 51820,
-  vpsPubKey: '',
-  vpsTargets: [],
-  activeVpsId: '',
-  tunnelClientIp: '10.8.0.2',
-  tunnelServerIp: '10.8.0.1',
-  domain: '',
-  acmeEmail: '',
-  services: [],
-  serviceHealth: {},
-  auth: {
-    passwordHash: '',
-    sessions: [],
-    pubkeys: []
-  },
-  failoverPolicy: { ...FAILOVER_POLICY_DEFAULTS }
-};
-
-const DEFAULT_CADDYFILE = ':80 {\n  respond "Umbrel Tunnel — not configured yet"\n}\n';
 
 app.use(express.json({ limit: '32kb' }));
 app.disable('x-powered-by');
@@ -96,13 +95,18 @@ app.use((req, res, next) => {
   next();
 });
 
+// realIp: usa el peer TCP (no falsificable vía X-Forwarded-For) para el conteo.
+// Imprescindible en endpoints sensibles a fuerza bruta.
 const rateBuckets = {
   default: { max: 120, windowMs: 60_000 },
-  '/api/keygen': { max: 5, windowMs: 3_600_000 },
+  '/api/keygen': { max: 5, windowMs: 3_600_000, realIp: true },
   '/api/vps-setup-script': { max: 10, windowMs: 600_000 },
   '/api/config': { max: 30, windowMs: 60_000 },
-  '/api/rotate/prepare': { max: 3, windowMs: 300_000 },
-  '/api/rotate/confirm': { max: 5, windowMs: 300_000 }
+  '/api/auth/login': { max: 10, windowMs: 60_000, realIp: true },
+  '/api/auth/password': { max: 5, windowMs: 300_000, realIp: true },
+  '/api/auth/verify': { max: 20, windowMs: 60_000, realIp: true },
+  '/api/rotate/prepare': { max: 3, windowMs: 300_000, realIp: true },
+  '/api/rotate/confirm': { max: 5, windowMs: 300_000, realIp: true }
 };
 const apiRateStore = new Map();
 let rateGc = null;
@@ -252,6 +256,35 @@ function createSession(ip, source = 'web') {
   };
 }
 
+// Comparación de strings en tiempo constante (longitud fija) para evitar side-channels.
+function timingSafeStrEq(a, b) {
+  const bufA = Buffer.from(String(a || '').padEnd(128).slice(0, 128));
+  const bufB = Buffer.from(String(b || '').padEnd(128).slice(0, 128));
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+// IP para throttling anti-fuerza-bruta: usa el peer TCP real (no falsificable),
+// no req.ip, que deriva de X-Forwarded-For y un cliente puede manipular.
+function authClientIp(req) {
+  return req.socket?.remoteAddress || req.ip || 'unknown';
+}
+
+// ¿La request está autenticada por token de API (header) o por sesión válida?
+// Centraliza la lógica usada por requireApiAuth y por cambios de contraseña.
+function isAuthenticatedRequest(req, cfg) {
+  const headerToken = req.get('x-tunnel-api-token') || '';
+  // Un token vacío configurado nunca debe autenticar (evita bypass si API_AUTH_TOKEN no se generó).
+  const headerOk = Boolean(API_AUTH_TOKEN) && timingSafeStrEq(headerToken, API_AUTH_TOKEN);
+  const cookies = parseCookies(req);
+  const sessionToken = cookies[SESSION_COOKIE] || '';
+  const now = Date.now();
+  const sessions = Array.isArray(cfg?.auth?.sessions) ? cfg.auth.sessions : [];
+  const sessionOk = Boolean(
+    sessionToken && sessions.some(s => s.expiresAt > now && timingSafeStrEq(s.id, sessionToken))
+  );
+  return headerOk || sessionOk;
+}
+
 function cleanupApiRateStore() {
   const now = Date.now();
   for (const [bucketName, bucketStore] of apiRateStore.entries()) {
@@ -302,7 +335,7 @@ function apiRateLimit(req, res, next) {
   const store = apiRateStore.get(bucketName) || new Map();
   apiRateStore.set(bucketName, store);
   const now = Date.now();
-  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  const ip = bucket.realIp ? authClientIp(req) : (req.ip || req.socket?.remoteAddress || 'unknown');
   const entry = store.get(ip);
 
   if (!entry || now > entry.resetAt) {
@@ -326,21 +359,15 @@ function requireApiAuth(req, res, next) {
     '/auth/login', '/api/auth/login',
     '/auth/challenge', '/api/auth/challenge',
     '/auth/verify', '/api/auth/verify',
+    // /auth/password se deja pasar aquí pero el handler exige auth para CAMBIOS
+    // (solo el primer set, en bootstrap, es libre). Ver app.post('/api/auth/password').
     '/auth/password', '/api/auth/password',
     '/auth/status', '/api/auth/status'
   ];
   if (publicPaths.includes(req.path)) return next();
-  const headerToken = req.get('x-tunnel-api-token') || '';
-  const cookies = parseCookies(req);
-  const sessionToken = cookies[SESSION_COOKIE] || '';
-  const expected = Buffer.from(String(API_AUTH_TOKEN).padEnd(128).slice(0, 128));
-  const headerOk = crypto.timingSafeEqual(Buffer.from(String(headerToken).padEnd(128).slice(0, 128)), expected);
   const cfg = loadConfig();
-  const now = Date.now();
-  const sessions = Array.isArray(cfg.auth?.sessions) ? cfg.auth.sessions : [];
-  const sessionOk = Boolean(sessionToken && sessions.some(s => s.id === sessionToken && s.expiresAt > now));
 
-  if (!headerOk && !sessionOk) {
+  if (!isAuthenticatedRequest(req, cfg)) {
     audit.log({ action: 'auth.fail', ip: req.ip, path: req.path });
     return res.status(401).json({ error: 'No autorizado' });
   }
@@ -470,17 +497,6 @@ function normalizeFailoverPolicy(input) {
 
 function extractFailoverPolicy(cfg) {
   return normalizeFailoverPolicy(cfg?.failoverPolicy);
-}
-
-function openApiFailoverPolicySchema() {
-  return {
-    type: 'object',
-    properties: {
-      activeFailuresRequired: { type: 'integer', minimum: 1, maximum: 10 },
-      candidateSuccessesRequired: { type: 'integer', minimum: 1, maximum: 10 },
-      cooldownMs: { type: 'integer', minimum: 0, maximum: 3600000 }
-    }
-  };
 }
 
 function migrateConfigIfNeeded() {
@@ -657,99 +673,28 @@ function getVpsProbeState(targetId) {
   return failoverState.get(targetId) || { okStreak: 0, failStreak: 0 };
 }
 
-function isWireGuardKey(value) {
-  if (typeof value !== 'string' || !/^[A-Za-z0-9+/]{43}=$/.test(value)) return false;
-  try {
-    return Buffer.from(value, 'base64').length === 32;
-  } catch {
-    return false;
-  }
-}
-
-function keyFingerprint(key) {
-  if (!isWireGuardKey(key)) return '';
-  const raw = Buffer.from(key, 'base64');
-  const hash = crypto.createHash('sha256').update(raw).digest();
-  return hash.slice(0, 16).toString('hex').match(/.{2}/g).join(':');
-}
-
-function isHostname(value) {
-  if (typeof value !== 'string' || value.length > 253) return false;
-  const labels = value.split('.');
-  if (labels.length < 2) return false;
-  return labels.every(label => /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/.test(label));
-}
-
-function isSubdomain(value) {
-  if (!value) return true;
-  return typeof value === 'string' && /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/.test(value);
-}
-
-function isEmail(value) {
-  return !value || (typeof value === 'string' && /^[^\s@{}]+@[^\s@{}]+\.[^\s@{}]+$/.test(value));
-}
-
 async function validateEmailWithMx(value) {
   if (!value) return { ok: true, reason: 'empty' };
   const match = String(value).match(/^[A-Za-z0-9._%+\-]+@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})$/);
   if (!match) return { ok: false, reason: 'syntax' };
   try {
-    const mx = await dns.promises.resolveMx(match[1]);
+    // Timeout para que un resolver lento (o un dominio elegido por el usuario)
+    // no bloquee el guardado de config.
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('mx_timeout')), 4000).unref?.());
+    const mx = await Promise.race([dns.promises.resolveMx(match[1]), timeout]);
     if (!Array.isArray(mx) || mx.length === 0) return { ok: false, reason: 'mx_empty' };
     return { ok: true, mxCount: mx.length };
   } catch (err) {
-    return { ok: false, reason: 'mx_lookup_failed', code: err.code || 'unknown' };
+    return { ok: false, reason: 'mx_lookup_failed', code: err.code || err.message || 'unknown' };
   }
 }
 
-function isTargetUrl(value) {
-  try {
-    const url = new URL(value);
-    const hasPath = url.pathname && url.pathname !== '/';
-    const hasQuery = Boolean(url.search);
-    const hasHash = Boolean(url.hash);
-    return ['http:', 'https:'].includes(url.protocol)
-      && !/[\r\n{}]/.test(value)
-      && !hasPath
-      && !hasQuery
-      && !hasHash;
-  } catch {
-    return false;
-  }
-}
 
-function normalizeTargetUrl(value) {
-  if (typeof value !== 'string') return '';
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-  const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
-  try {
-    const parsed = new URL(candidate);
-    if (!['http:', 'https:'].includes(parsed.protocol)) return '';
-    return `${parsed.protocol}//${parsed.host}`;
-  } catch {
-    return '';
-  }
-}
-
-function isBlockedServiceTarget(value) {
-  try {
-    const parsed = new URL(value);
-    const host = parsed.hostname.toLowerCase();
-    const port = Number.parseInt(parsed.port || (parsed.protocol === 'https:' ? '443' : '80'), 10);
-
-    if (host === 'localhost' || host === '::1' || host === '[::1]') return true;
-    if (host === '0.0.0.0') return true;
-    if (/^127\./.test(host)) return true;
-    if (/^169\.254\./.test(host)) return true;
-
-    const blockedPorts = new Set([2019, 8080, 2375, 2376]);
-    if (blockedPorts.has(port)) return true;
-
-    return false;
-  } catch {
-    return true;
-  }
+// Envuelve handlers async para que un rechazo vaya a next(err) en vez de colgar
+// la request (Express 4 no captura rejections de funciones async por sí solo).
+function asyncHandler(fn) {
+  return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 }
 
 function validateBody(schema) {
@@ -771,22 +716,43 @@ function serviceKey(svc) {
 
 function probeServiceTarget(target, timeoutMs = 4000) {
   return new Promise(resolve => {
+    let parsed;
     try {
-      const parsed = new URL(target);
-      const isHttps = parsed.protocol === 'https:';
-      if (!isHttps && parsed.protocol !== 'http:') {
-        return resolve({ ok: false, error: 'Protocolo no soportado' });
+      parsed = new URL(target);
+    } catch (err) {
+      return resolve({ ok: false, error: 'URL inválida' });
+    }
+    const isHttps = parsed.protocol === 'https:';
+    if (!isHttps && parsed.protocol !== 'http:') {
+      return resolve({ ok: false, error: 'Protocolo no soportado' });
+    }
+
+    const hostname = parsed.hostname.replace(/^\[|\]$/g, '');
+    // Resuelve el host y rechaza si apunta a loopback/metadata (anti-SSRF + anti-rebinding).
+    // No bloquea RFC1918: exponer servicios internos es el propósito de la app.
+    dns.lookup(hostname, { all: true }, (err, addresses) => {
+      if (err || !addresses || addresses.length === 0) {
+        return resolve({ ok: false, error: 'No resoluble' });
       }
+      const blocked = addresses.find(a => isDisallowedTargetIp(a.address));
+      if (blocked) {
+        return resolve({ ok: false, error: 'Destino bloqueado' });
+      }
+      const pinned = addresses[0];
 
       const transport = isHttps ? https : http;
       const req = transport.request(
         {
           protocol: parsed.protocol,
-          hostname: parsed.hostname,
+          hostname,
           port: parsed.port || (isHttps ? 443 : 80),
           path: '/',
           method: 'GET',
           timeout: timeoutMs,
+          // Fija la IP ya validada: evita que un segundo lookup (rebinding) apunte a otra IP.
+          lookup: (_host, _opts, cb) => cb(null, pinned.address, pinned.family),
+          servername: hostname,
+          // Servicios internos suelen usar certs autofirmados; el probe solo mide alcance.
           rejectUnauthorized: false
         },
         res => {
@@ -796,11 +762,9 @@ function probeServiceTarget(target, timeoutMs = 4000) {
       );
 
       req.on('timeout', () => req.destroy(new Error('timeout')));
-      req.on('error', err => resolve({ ok: false, error: err.message }));
+      req.on('error', e => resolve({ ok: false, error: e.message }));
       req.end();
-    } catch (err) {
-      resolve({ ok: false, error: err.message });
-    }
+    });
   });
 }
 
@@ -907,7 +871,7 @@ async function maybeFailover(cfg, reason = 'auto') {
     cfg.activeVpsId = next.id;
     ensureVpsTargets(cfg);
     saveConfig(cfg);
-    const wgConf = generateWgConf(cfg);
+    const wgConf = generateWgConf(cfg, getActiveVpsTarget(cfg));
     if (wgConf) fs.writeFileSync(WG_CONF, wgConf);
     switched = true;
     failoverLastSwitchAt = Date.now();
@@ -1015,383 +979,6 @@ function validateConfig(cfg) {
   return errors;
 }
 
-function generateWgConf(cfg) {
-  const active = getActiveVpsTarget(cfg);
-  if (!cfg.privateKey || !active?.pubKey || !active?.ip) return null;
-  const pskLine = cfg.presharedKey ? `PresharedKey = ${cfg.presharedKey}` : null;
-  return [
-    '[Interface]',
-    `Address = ${cfg.tunnelClientIp}/32`,
-    `PrivateKey = ${cfg.privateKey}`,
-    '',
-    '[Peer]',
-    `PublicKey = ${active.pubKey}`,
-    pskLine,
-    `Endpoint = ${active.ip}:${active.port}`,
-    `AllowedIPs = ${cfg.tunnelServerIp}/32`,
-    'PersistentKeepalive = 25',
-    ''
-  ].filter(Boolean).join('\n');
-}
-
-function generateCaddyfile(cfg) {
-  const enabled = (cfg.services || []).filter(s => s.enabled && s.target && !isBlockedServiceTarget(s.target));
-  if (!cfg.domain || !cfg.acmeEmail || !enabled.length) return DEFAULT_CADDYFILE;
-
-  const blocks = [`{\n  email ${cfg.acmeEmail}\n  admin off\n}\n`];
-  for (const svc of enabled) {
-    const host = svc.subdomain ? `${svc.subdomain}.${cfg.domain}` : cfg.domain;
-    blocks.push(`${host} {\n  reverse_proxy ${svc.target}\n}\n`);
-  }
-  return blocks.join('\n');
-}
-
-function generateVpsScript(cfg, target, options = {}) {
-  const selected = target || getActiveVpsTarget(cfg);
-  if (!selected) throw new Error('No hay VPS seleccionado');
-  const withCrowdsec = Boolean(options.withCrowdsec);
-  const pskLine = cfg.presharedKey
-    ? `PresharedKey = ${cfg.presharedKey}`
-    : '';
-  const crowdsecBlock = withCrowdsec
-    ? `
-# CrowdSec opcional
-echo "Instalando CrowdSec..."
-if ! command -v curl >/dev/null 2>&1; then
-  apt-get -o DPkg::Lock::Timeout=300 install -y -qq curl ca-certificates
-fi
-if ! command -v cscli >/dev/null 2>&1; then
-  curl -fsSL https://install.crowdsec.net | sh
-fi
-apt-get -o DPkg::Lock::Timeout=300 install -y -qq crowdsec crowdsec-firewall-bouncer-iptables
-cscli collections install crowdsecurity/sshd || true
-systemctl enable crowdsec crowdsec-firewall-bouncer >/dev/null 2>&1 || true
-systemctl restart crowdsec crowdsec-firewall-bouncer >/dev/null 2>&1 || true
-for i in 1 2 3 4 5; do
-  if systemctl is-active --quiet crowdsec && systemctl is-active --quiet crowdsec-firewall-bouncer; then
-    break
-  fi
-  sleep 1
-done
-if ! systemctl is-active --quiet crowdsec; then
-  echo "Advertencia: crowdsec no quedo activo"
-fi
-if ! systemctl is-active --quiet crowdsec-firewall-bouncer; then
-  echo "Advertencia: crowdsec-firewall-bouncer no quedo activo"
-fi
-cscli lapi status >/dev/null 2>&1 || echo "Advertencia: cscli no pudo validar LAPI"
-cscli bouncers list >/dev/null 2>&1 || echo "Advertencia: cscli no pudo listar bouncers"
-iptables-save | grep -qi crowdsec || echo "Advertencia: no se detecto hook iptables de CrowdSec"
-`
-    : '';
-  return `#!/bin/bash
-# Umbrel Tunnel — VPS Setup
-# Ejecutar como root en un VPS Debian/Ubuntu
-# VPS dedicado exclusivamente a reverse proxy
-
-set -euo pipefail
-export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
-if [ "$(id -u)" -ne 0 ]; then
-  echo "Este script debe ejecutarse como root"
-  exit 1
-fi
-
-export DEBIAN_FRONTEND=noninteractive
-
-if command -v ufw >/dev/null 2>&1; then
-  ufw disable >/dev/null 2>&1 || true
-  systemctl disable ufw >/dev/null 2>&1 || true
-  systemctl stop ufw >/dev/null 2>&1 || true
-fi
-
-apt-get -o DPkg::Lock::Timeout=300 update -qq
-echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections
-echo iptables-persistent iptables-persistent/autosave_v6 boolean false | debconf-set-selections
-apt-get -o DPkg::Lock::Timeout=300 install -y -qq wireguard iptables iptables-persistent fail2ban unattended-upgrades
-
-PUBLIC_IF=$(ip route show default | awk '/default/{print $5; exit}')
-if [ -z "$PUBLIC_IF" ]; then
-  echo "No se pudo detectar la interfaz de red publica"
-  exit 1
-fi
-
-SSH_PORT=$(/usr/sbin/sshd -T 2>/dev/null | awk '/^port /{print $2; exit}' || true)
-if [ -z "$SSH_PORT" ]; then
-  SSH_PORT=$(awk '/^[[:space:]]*Port[[:space:]]+[0-9]+/{print $2; exit}' /etc/ssh/sshd_config 2>/dev/null || true)
-fi
-[ -z "$SSH_PORT" ] && SSH_PORT=22
-
-if ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)\${SSH_PORT}$"; then
-  echo "No se detecta sshd escuchando en el puerto $SSH_PORT. Abortando para evitar lockout."
-  exit 1
-fi
-
-WG_PORT=${selected.port}
-WG_CLIENT_IP=${cfg.tunnelClientIp}
-
-mkdir -p /root/miniweed-backups
-BACKUP_FILE="/root/miniweed-backups/iptables-before-$(date +%s).rules"
-iptables-save > "$BACKUP_FILE"
-
-cat > /root/miniweed-rollback-firewall.sh <<'ROLLBACKEOF'
-#!/bin/bash
-set -euo pipefail
-LATEST=$(ls -1t /root/miniweed-backups/iptables-before-*.rules 2>/dev/null | head -1)
-if [ -z "$LATEST" ]; then
-  echo "No hay backup de firewall para restaurar"
-  exit 1
-fi
-iptables-restore < "$LATEST"
-echo "Restaurado firewall desde $LATEST"
-ROLLBACKEOF
-chmod 700 /root/miniweed-rollback-firewall.sh
-
-ROLLBACK_FLAG=/root/miniweed-firewall-ok
-rm -f "$ROLLBACK_FLAG"
-( sleep 120; [ -f "$ROLLBACK_FLAG" ] || /root/miniweed-rollback-firewall.sh ) &
-ROLLBACK_PID=$!
-
-# Hardening de red del host
-cat > /etc/sysctl.d/99-miniweed-tunnel-hardening.conf <<SYSCTLEOF
-net.ipv4.ip_forward=1
-net.ipv4.conf.all.rp_filter=2
-net.ipv4.conf.default.rp_filter=2
-net.ipv4.conf.all.accept_redirects=0
-net.ipv4.conf.default.accept_redirects=0
-net.ipv4.conf.all.send_redirects=0
-net.ipv4.conf.default.send_redirects=0
-net.ipv4.icmp_echo_ignore_broadcasts=1
-net.ipv4.tcp_syncookies=1
-SYSCTLEOF
-sysctl --system >/dev/null
-
-# Firewall estricto para VPS dedicado (sin cortar la sesion SSH activa)
-iptables -w -P INPUT ACCEPT
-iptables -w -P FORWARD ACCEPT
-iptables -w -P OUTPUT ACCEPT
-iptables -w -t nat -F
-iptables -w -F
-iptables -w -X
-
-iptables -w -A INPUT -i lo -j ACCEPT
-iptables -w -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-iptables -w -A INPUT -p tcp --dport "$SSH_PORT" -j ACCEPT
-iptables -w -A INPUT -p tcp --dport 80 -j ACCEPT
-iptables -w -A INPUT -p tcp --dport 443 -j ACCEPT
-iptables -w -A INPUT -p udp --dport "$WG_PORT" -j ACCEPT
-iptables -w -A INPUT -p icmp --icmp-type echo-request -m limit --limit 10/second --limit-burst 20 -j ACCEPT
-
-iptables -w -t nat -A PREROUTING -p tcp --dport 80 -j DNAT --to-destination "$WG_CLIENT_IP:80"
-iptables -w -t nat -A PREROUTING -p tcp --dport 443 -j DNAT --to-destination "$WG_CLIENT_IP:443"
-# Evita retorno asimetrico: SNAT al lado WG para que Umbrel responda por el tunel
-iptables -w -t nat -A POSTROUTING -o wg0 -p tcp -d "$WG_CLIENT_IP" --dport 80 -j MASQUERADE
-iptables -w -t nat -A POSTROUTING -o wg0 -p tcp -d "$WG_CLIENT_IP" --dport 443 -j MASQUERADE
-iptables -w -t nat -A POSTROUTING -o "$PUBLIC_IF" -j MASQUERADE
-
-iptables -w -A FORWARD -p tcp -d "$WG_CLIENT_IP" --dport 80 -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
-iptables -w -A FORWARD -p tcp -d "$WG_CLIENT_IP" --dport 443 -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
-iptables -w -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-
-iptables -w -P INPUT DROP
-iptables -w -P FORWARD DROP
-
-iptables-save > /etc/iptables/rules.v4
-systemctl enable netfilter-persistent >/dev/null 2>&1 || true
-systemctl restart netfilter-persistent >/dev/null 2>&1 || true
-
-# Fail2ban para SSH
-mkdir -p /etc/fail2ban/jail.d
-cat > /etc/fail2ban/jail.d/sshd.local <<FAIL2BANEOF
-[sshd]
-enabled = true
-backend = systemd
-maxretry = 5
-findtime = 10m
-bantime = 1h
-FAIL2BANEOF
-systemctl enable fail2ban >/dev/null 2>&1 || true
-systemctl restart fail2ban >/dev/null 2>&1 || true
-
-# Actualizaciones de seguridad automáticas
-systemctl enable unattended-upgrades >/dev/null 2>&1 || true
-systemctl restart unattended-upgrades >/dev/null 2>&1 || true
-${crowdsecBlock}
-
-# Endurecer SSH a solo clave publica (sin romper acceso)
-SSH_HARDENED="no"
-if [ -s /root/.ssh/authorized_keys ]; then
-  mkdir -p /etc/ssh/sshd_config.d
-  cat > /etc/ssh/sshd_config.d/99-miniweed-tunnel.conf <<SSHEOF
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-ChallengeResponseAuthentication no
-PubkeyAuthentication yes
-PermitRootLogin prohibit-password
-SSHEOF
-
-  if /usr/sbin/sshd -t; then
-    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
-    SSH_HARDENED="yes"
-  else
-    rm -f /etc/ssh/sshd_config.d/99-miniweed-tunnel.conf
-    echo "Advertencia: configuracion SSH invalida, se omite endurecimiento SSH"
-  fi
-else
-  echo "Advertencia: /root/.ssh/authorized_keys no existe o esta vacio; se mantiene acceso por password para evitar lockout"
-fi
-
-VPS_PRIV=$(wg genkey)
-VPS_PUB=$(echo "$VPS_PRIV" | wg pubkey)
-
-cat > /etc/wireguard/wg0.conf <<WGEOF
-[Interface]
-Address = ${cfg.tunnelServerIp}/24
-ListenPort = ${selected.port}
-PrivateKey = $VPS_PRIV
-
-[Peer]
-PublicKey = ${cfg.publicKey}
-${pskLine}
-AllowedIPs = ${cfg.tunnelClientIp}/32
-WGEOF
-
-chmod 600 /etc/wireguard/wg0.conf
-
-systemctl enable wg-quick@wg0
-if systemctl is-active --quiet wg-quick@wg0; then
-  systemctl restart wg-quick@wg0
-else
-  systemctl start wg-quick@wg0
-fi
-
-if ! systemctl is-active --quiet wg-quick@wg0; then
-  /root/miniweed-rollback-firewall.sh || true
-  echo "WireGuard no arrancó correctamente. Firewall restaurado."
-  exit 1
-fi
-
-ACTIVE_PUB=$(wg show wg0 public-key 2>/dev/null || true)
-if [ -z "$ACTIVE_PUB" ]; then
-  /root/miniweed-rollback-firewall.sh || true
-  echo "No se pudo leer la clave publica activa de wg0 tras aplicar la configuracion."
-  exit 1
-fi
-if [ "$ACTIVE_PUB" != "$VPS_PUB" ]; then
-  /root/miniweed-rollback-firewall.sh || true
-  echo "La clave activa de wg0 no coincide con la nueva clave generada."
-  echo "Esperada: $VPS_PUB"
-  echo "Activa:   $ACTIVE_PUB"
-  exit 1
-fi
-
-touch "$ROLLBACK_FLAG"
-kill "$ROLLBACK_PID" 2>/dev/null || true
-
-echo ""
-echo "=============================================="
-echo " VPS Public Key: $VPS_PUB"
-echo "=============================================="
-echo " SSH PORT permitido: $SSH_PORT"
-if [ "$SSH_HARDENED" = "yes" ]; then
-  echo " SSH hardening: PasswordAuthentication no (solo clave publica)"
-else
-  echo " SSH hardening: OMITIDO para evitar lockout"
-fi
-echo " IMPORTANTE: en el panel cloud del proveedor abre TCP 80/443 y UDP $WG_PORT"
-echo " Backup firewall: $BACKUP_FILE"
-echo " Rollback script: /root/miniweed-rollback-firewall.sh"
-echo " Pega esta clave en Umbrel Tunnel y listo."
-`;
-}
-
-function buildKillSwitchScript() {
-  return `#!/usr/bin/env bash
-set -euo pipefail
-
-if [ "$(id -u)" -ne 0 ]; then
-  echo "[killswitch] must run as root"
-  exit 1
-fi
-
-WG_PORT="\${WG_PORT:-51820}"
-STATUS_FILE="\${STATUS_FILE:-/var/run/miniweed.status}"
-
-echo "[killswitch] stopping wg0"
-systemctl stop wg-quick@wg0 || true
-
-echo "[killswitch] blocking udp/\${WG_PORT}"
-iptables -w -C INPUT -p udp --dport "$WG_PORT" -j DROP 2>/dev/null || iptables -w -A INPUT -p udp --dport "$WG_PORT" -j DROP
-
-echo "killed at $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATUS_FILE"
-echo "[killswitch] completed"
-`;
-}
-
-function buildVpsRotateScript(cfg, next, target) {
-  const selected = target || getActiveVpsTarget(cfg);
-  if (!selected) throw new Error('No hay VPS activo para rotación');
-  const pskLine = next.presharedKey ? `PresharedKey = ${next.presharedKey}` : '';
-  return `#!/usr/bin/env bash
-set -euo pipefail
-
-BACKUP="/etc/wireguard/wg0.conf.rotate-$(date +%s).bak"
-NEW_CONF_FILE="/tmp/wg0.rotate.new.conf"
-
-rollback() {
-  echo "ROTATE_FAIL: restoring $BACKUP"
-  cp "$BACKUP" /etc/wireguard/wg0.conf
-  wg-quick down wg0 2>/dev/null || true
-  wg-quick up wg0
-  exit 1
-}
-
-trap rollback ERR
-
-cp /etc/wireguard/wg0.conf "$BACKUP"
-
-cat > "$NEW_CONF_FILE" <<'WGEOF'
-[Interface]
-Address = ${cfg.tunnelServerIp}/24
-ListenPort = ${selected.port}
-PrivateKey = __KEEP_EXISTING_VPS_PRIVATE_KEY__
-
-[Peer]
-PublicKey = ${next.publicKey}
-${pskLine}
-AllowedIPs = ${cfg.tunnelClientIp}/32
-WGEOF
-
-if grep -q '^PrivateKey' /etc/wireguard/wg0.conf; then
-  VPS_PRIV=$(awk -F' = ' '/^PrivateKey/ {print $2; exit}' /etc/wireguard/wg0.conf)
-else
-  echo "No se pudo leer PrivateKey actual de /etc/wireguard/wg0.conf"
-  exit 1
-fi
-
-sed -i "s|__KEEP_EXISTING_VPS_PRIVATE_KEY__|$VPS_PRIV|g" "$NEW_CONF_FILE"
-cp "$NEW_CONF_FILE" /etc/wireguard/wg0.conf
-chmod 600 /etc/wireguard/wg0.conf
-
-wg-quick down wg0 || true
-wg-quick up wg0
-
-for i in $(seq 1 30); do
-  HS=$(wg show wg0 latest-handshakes | awk '{print $2}' | head -n1)
-  if [ -n "$HS" ] && [ "$HS" -gt 0 ] 2>/dev/null; then
-    NOW=$(date +%s)
-    AGE=$((NOW - HS))
-    if [ "$AGE" -lt 90 ]; then
-      echo "ROTATE_OK"
-      exit 0
-    fi
-  fi
-  sleep 1
-done
-
-rollback
-`;
-}
 
 async function computeHealth(cfg) {
   const active = getActiveVpsTarget(cfg);
@@ -1607,7 +1194,7 @@ app.post('/api/config', async (req, res) => {
         ip: req.ip
       });
 
-      const wgConf = generateWgConf(cfg);
+      const wgConf = generateWgConf(cfg, getActiveVpsTarget(cfg));
       if (wgConf) fs.writeFileSync(WG_CONF, wgConf);
       fs.writeFileSync(CADDYFILE, generateCaddyfile(cfg));
 
@@ -1637,20 +1224,46 @@ app.get('/api/auth/status', (req, res) => {
 
 app.post('/api/auth/password', validateBody(AuthPasswordSchema), async (req, res) => {
   const password = String(req.body?.password || '');
-  await withConfigLock(async () => {
-    const cfg = loadConfig();
-    cfg.auth = cfg.auth || {};
-    cfg.auth.passwordHash = hashPassword(password);
-    cfg.auth.sessions = [];
-    saveConfig(cfg);
-  });
-  audit.log({ action: 'auth.password.set', ip: req.ip });
+  const currentPassword = String(req.body?.currentPassword || '');
+  let denied = false;
+  let changed = false;
+  try {
+    await withConfigLock(async () => {
+      const cfg = loadConfig();
+      cfg.auth = cfg.auth || {};
+      const hasPassword = Boolean(cfg.auth.passwordHash);
+      if (hasPassword) {
+        // Cambio de contraseña: requiere sesión/token válido o la contraseña actual.
+        const authed = isAuthenticatedRequest(req, cfg);
+        const currentOk = Boolean(currentPassword) && verifyPassword(currentPassword, cfg.auth.passwordHash);
+        if (!authed && !currentOk) {
+          denied = true;
+          return;
+        }
+      }
+      // Primer set (bootstrap) o cambio autorizado.
+      cfg.auth.passwordHash = hashPassword(password);
+      cfg.auth.sessions = []; // invalida todas las sesiones existentes
+      saveConfig(cfg);
+      changed = true;
+    });
+  } catch (err) {
+    audit.log({ action: 'auth.password.error', ip: req.ip });
+    return res.status(500).json({ error: 'Error guardando contraseña' });
+  }
+  if (denied) {
+    const delay = authFailureDelayMs(authClientIp(req));
+    await new Promise(resolve => setTimeout(resolve, delay));
+    audit.log({ action: 'auth.password.denied', ip: req.ip });
+    return res.status(401).json({ error: 'No autorizado' });
+  }
+  if (changed) audit.log({ action: 'auth.password.set', ip: req.ip });
   return res.json({ ok: true });
 });
 
-app.post('/api/auth/login', validateBody(AuthLoginSchema), async (req, res) => {
+app.post('/api/auth/login', validateBody(AuthLoginSchema), asyncHandler(async (req, res) => {
   const password = String(req.body?.password || '');
-  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  const ip = authClientIp(req);
 
   const cfg = loadConfig();
   const hash = cfg.auth?.passwordHash || '';
@@ -1681,7 +1294,7 @@ app.post('/api/auth/login', validateBody(AuthLoginSchema), async (req, res) => {
   res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${encodeURIComponent(session.id)}; Path=/; HttpOnly; SameSite=Strict${secureAttr}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`);
   audit.log({ action: 'auth.success', ip, path: '/api/auth/login' });
   return res.json({ ok: true });
-});
+}));
 
 app.get('/api/auth/sessions', (req, res) => {
   const cfg = loadConfig();
@@ -1701,7 +1314,7 @@ app.get('/api/auth/sessions', (req, res) => {
   });
 });
 
-app.delete('/api/auth/sessions/:id', async (req, res) => {
+app.delete('/api/auth/sessions/:id', asyncHandler(async (req, res) => {
   const sessionId = String(req.params.id || '').trim();
   if (!sessionId) return res.status(400).json({ error: 'session id requerida' });
   const now = Date.now();
@@ -1714,9 +1327,9 @@ app.delete('/api/auth/sessions/:id', async (req, res) => {
   });
   audit.log({ action: 'auth.session.revoke', ip: req.ip || req.socket?.remoteAddress || 'unknown', sessionId });
   return res.json({ ok: true });
-});
+}));
 
-app.post('/api/auth/pubkeys', async (req, res) => {
+app.post('/api/auth/pubkeys', asyncHandler(async (req, res) => {
   const name = String(req.body?.name || '').trim();
   const inputKey = String(req.body?.publicKey || '').trim();
   if (!name || !inputKey) return res.status(400).json({ error: 'name y publicKey requeridos' });
@@ -1740,7 +1353,7 @@ app.post('/api/auth/pubkeys', async (req, res) => {
   });
   audit.log({ action: 'auth.pubkey.add', ip: req.ip || req.socket?.remoteAddress || 'unknown', keyId, name });
   return res.json({ ok: true, keyId });
-});
+}));
 
 app.get('/api/auth/pubkeys', (req, res) => {
   const cfg = loadConfig();
@@ -1748,7 +1361,7 @@ app.get('/api/auth/pubkeys', (req, res) => {
   res.json({ pubkeys: pubkeys.map(p => ({ id: p.id, name: p.name, addedAt: p.addedAt })) });
 });
 
-app.delete('/api/auth/pubkeys/:id', async (req, res) => {
+app.delete('/api/auth/pubkeys/:id', asyncHandler(async (req, res) => {
   const keyId = String(req.params.id || '').trim();
   if (!keyId) return res.status(400).json({ error: 'key id requerida' });
   await withConfigLock(async () => {
@@ -1760,7 +1373,7 @@ app.delete('/api/auth/pubkeys/:id', async (req, res) => {
   });
   audit.log({ action: 'auth.pubkey.remove', ip: req.ip || req.socket?.remoteAddress || 'unknown', keyId });
   return res.json({ ok: true });
-});
+}));
 
 app.post('/api/auth/challenge', (req, res) => {
   const keyId = String(req.body?.keyId || '').trim();
@@ -1782,7 +1395,7 @@ app.post('/api/auth/challenge', (req, res) => {
   return res.json({ challengeId, nonce, expiresInSec: Math.floor(CHALLENGE_TTL_MS / 1000) });
 });
 
-app.post('/api/auth/verify', async (req, res) => {
+app.post('/api/auth/verify', asyncHandler(async (req, res) => {
   const challengeId = String(req.body?.challengeId || '').trim();
   const signatureB64 = String(req.body?.signature || '').trim();
   if (!challengeId || !signatureB64) {
@@ -1824,9 +1437,9 @@ app.post('/api/auth/verify', async (req, res) => {
   });
   audit.log({ action: 'auth.success', ip, path: '/api/auth/verify', keyId: challenge.keyId });
   return res.json({ ok: true, sessionToken: session.id, expiresAt: session.expiresAt });
-});
+}));
 
-app.post('/api/auth/logout', async (req, res) => {
+app.post('/api/auth/logout', asyncHandler(async (req, res) => {
   const cookies = parseCookies(req);
   const sessionId = cookies[SESSION_COOKIE] || '';
   const now = Date.now();
@@ -1841,7 +1454,7 @@ app.post('/api/auth/logout', async (req, res) => {
   res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict${secureAttr}; Max-Age=0`);
   audit.log({ action: 'auth.logout', ip: req.ip || req.socket?.remoteAddress || 'unknown' });
   return res.json({ ok: true });
-});
+}));
 
 // ── vps endpoints ────────────────────────────────────────────────────────────
 
@@ -1865,7 +1478,7 @@ app.post('/api/vps/failover', async (req, res) => {
   cfg.activeVpsId = target.id;
   ensureVpsTargets(cfg);
   saveConfig(cfg);
-  const wgConf = generateWgConf(cfg);
+  const wgConf = generateWgConf(cfg, getActiveVpsTarget(cfg));
   if (wgConf) fs.writeFileSync(WG_CONF, wgConf);
   audit.log({ action: 'vps.failover.manual', ip: req.ip, to: target.id, toIp: target.ip });
   return res.json({ ok: true, switched: true, next: { id: target.id, name: target.name, ip: target.ip }, activeVpsId: cfg.activeVpsId });
@@ -2038,537 +1651,7 @@ app.get('/api/audit/verify', (req, res) => {
 });
 
 app.get('/api/openapi.json', (req, res) => {
-  res.json({
-    openapi: '3.1.0',
-    info: {
-      title: 'Tunnel API',
-      version: '1.4.0'
-    },
-    components: {
-      schemas: {
-        RotatePrepareRequest: {
-          type: 'object',
-          properties: {
-            nextPrivateKey: { type: 'string', pattern: '^[A-Za-z0-9+/]{43}=$' },
-            nextPublicKey: { type: 'string', pattern: '^[A-Za-z0-9+/]{43}=$' },
-            nextPresharedKey: { type: 'string', pattern: '^[A-Za-z0-9+/]{43}=$' }
-          }
-        },
-        RotateConfirmRequest: {
-          type: 'object',
-          required: ['planId'],
-          properties: {
-            planId: { type: 'string', pattern: '^[a-f0-9]{32}$' },
-            apply: { type: 'boolean', default: true }
-          }
-        },
-        RotatePrepareResponse: {
-          type: 'object',
-          required: ['ok', 'planId', 'expiresInSec', 'nextPublicKey', 'nextPublicKeyFingerprint', 'script', 'scriptSha256'],
-          properties: {
-            ok: { type: 'boolean' },
-            planId: { type: 'string' },
-            expiresInSec: { type: 'integer' },
-            nextPublicKey: { type: 'string' },
-            nextPublicKeyFingerprint: { type: 'string' },
-            script: { type: 'string' },
-            scriptSha256: { type: 'string', pattern: '^[a-f0-9]{64}$' }
-          }
-        },
-        RotateStatusResponse: {
-          type: 'object',
-          required: ['id', 'createdAt', 'expiresAt', 'nextPublicKey', 'nextPublicKeyFingerprint', 'scriptSha256'],
-          properties: {
-            id: { type: 'string' },
-            createdAt: { type: 'integer' },
-            expiresAt: { type: 'integer' },
-            nextPublicKey: { type: 'string' },
-            nextPublicKeyFingerprint: { type: 'string' },
-            scriptSha256: { type: 'string', pattern: '^[a-f0-9]{64}$' }
-          }
-        },
-        RotateConfirmResponse: {
-          type: 'object',
-          required: ['ok'],
-          properties: {
-            ok: { type: 'boolean' },
-            cancelled: { type: 'boolean' },
-            applied: { type: 'boolean' },
-            nextPublicKey: { type: 'string' },
-            nextPublicKeyFingerprint: { type: 'string' }
-          }
-        },
-        KillSwitchScriptResponse: {
-          type: 'object',
-          required: ['script', 'sha256', 'filename'],
-          properties: {
-            script: { type: 'string' },
-            sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
-            filename: { type: 'string' }
-          }
-        },
-        VpsTarget: {
-          type: 'object',
-          required: ['id', 'name', 'ip', 'port', 'enabled', 'priority'],
-          properties: {
-            id: { type: 'string' },
-            name: { type: 'string' },
-            ip: { type: 'string' },
-            port: { type: 'integer', minimum: 1, maximum: 65535 },
-            pubKey: { type: 'string', pattern: '^[A-Za-z0-9+/]{43}=$' },
-            enabled: { type: 'boolean' },
-            priority: { type: 'integer', minimum: 0, maximum: 99 },
-            fingerprint: { type: 'string' },
-            health: {
-              type: 'object',
-              properties: {
-                ok: { type: 'boolean' },
-                checked: { type: 'boolean' },
-                checkedAt: { type: 'string' },
-                message: { type: 'string' },
-                latencyMs: { type: ['integer', 'null'] },
-                okStreak: { type: 'integer' },
-                failStreak: { type: 'integer' }
-              }
-            }
-          }
-        },
-        VpsTargetsResponse: {
-          type: 'object',
-          required: ['activeVpsId', 'targets'],
-          properties: {
-            activeVpsId: { type: 'string' },
-            targets: {
-              type: 'array',
-              items: { $ref: '#/components/schemas/VpsTarget' }
-            }
-          }
-        },
-        VpsFailoverRequest: {
-          type: 'object',
-          properties: {
-            targetId: { type: 'string' }
-          }
-        },
-        VpsFailoverResponse: {
-          type: 'object',
-          required: ['ok', 'activeVpsId'],
-          properties: {
-            ok: { type: 'boolean' },
-            switched: { type: 'boolean' },
-            activeVpsId: { type: 'string' },
-            policy: {
-              ...openApiFailoverPolicySchema()
-            },
-            next: {
-              type: 'object',
-              properties: {
-                id: { type: 'string' },
-                name: { type: 'string' },
-                ip: { type: 'string' }
-              }
-            }
-          }
-        },
-        VpsSetupScriptResponse: {
-          type: 'object',
-          required: ['script', 'sha256', 'filename', 'vps', 'withCrowdsec'],
-          properties: {
-            script: { type: 'string' },
-            sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
-            filename: { type: 'string' },
-            withCrowdsec: { type: 'boolean' },
-            vps: {
-              type: 'object',
-              required: ['id', 'name', 'ip', 'port'],
-              properties: {
-                id: { type: 'string' },
-                name: { type: 'string' },
-                ip: { type: 'string' },
-                port: { type: 'integer' }
-              }
-            }
-          }
-        },
-        AuditVerifyResponse: {
-          type: 'object',
-          required: ['ok', 'entries'],
-          properties: {
-            ok: { type: 'boolean' },
-            entries: { type: 'integer' },
-            brokenAt: { type: 'integer' },
-            reason: { type: 'string' }
-          }
-        },
-        ConfigUpdateRequest: {
-          type: 'object',
-          additionalProperties: true,
-          properties: {
-            vpsIp: { type: 'string' },
-            vpsPort: { type: 'integer' },
-            vpsPubKey: { type: 'string' },
-            activeVpsId: { type: 'string' },
-            domain: { type: 'string' },
-            acmeEmail: { type: 'string', format: 'email' },
-            failoverPolicy: openApiFailoverPolicySchema(),
-            privateKey: { type: 'string' },
-            services: {
-              type: 'array',
-              items: {
-                type: 'object',
-                additionalProperties: true,
-                properties: {
-                  name: { type: 'string' },
-                  subdomain: { type: 'string' },
-                  target: { type: 'string' },
-                  enabled: { type: 'boolean' }
-                }
-              }
-            },
-            vpsTargets: {
-              type: 'array',
-              items: { $ref: '#/components/schemas/VpsTarget' }
-            }
-          }
-        },
-        ConfigResponse: {
-          type: 'object',
-          additionalProperties: true,
-          required: ['vpsTargets', 'activeVpsId', 'auth', 'privateKey', 'vpsPubKeyFingerprint', 'vpsFingerprints'],
-          properties: {
-            vpsIp: { type: 'string' },
-            vpsPort: { type: 'integer' },
-            vpsPubKey: { type: 'string' },
-            activeVpsId: { type: 'string' },
-            domain: { type: 'string' },
-            acmeEmail: { type: 'string' },
-            failoverPolicy: openApiFailoverPolicySchema(),
-            vpsTargets: {
-              type: 'array',
-              items: { $ref: '#/components/schemas/VpsTarget' }
-            },
-            auth: {
-              type: 'object',
-              required: ['passwordEnabled', 'sessionCount'],
-              properties: {
-                passwordEnabled: { type: 'boolean' },
-                sessionCount: { type: 'integer' }
-              }
-            },
-            privateKey: { type: 'string' },
-            vpsPubKeyFingerprint: { type: 'string' },
-            vpsFingerprints: {
-              type: 'object',
-              additionalProperties: { type: 'string' }
-            },
-            services: {
-              type: 'array',
-              items: {
-                type: 'object',
-                additionalProperties: true,
-                properties: {
-                  name: { type: 'string' },
-                  subdomain: { type: 'string' },
-                  target: { type: 'string' },
-                  enabled: { type: 'boolean' }
-                }
-              }
-            },
-            serviceHealth: {
-              type: 'object',
-              additionalProperties: {
-                type: 'object',
-                additionalProperties: true,
-                properties: {
-                  ok: { type: 'boolean' },
-                  checked: { type: 'boolean' },
-                  statusCode: { type: 'integer' },
-                  message: { type: 'string' }
-                }
-              }
-            }
-          }
-        },
-        ConfigUpdateResponse: {
-          type: 'object',
-          required: ['ok', 'serviceHealth'],
-          properties: {
-            ok: { type: 'boolean' },
-            serviceHealth: {
-              type: 'object',
-              additionalProperties: {
-                type: 'object',
-                additionalProperties: true,
-                properties: {
-                  ok: { type: 'boolean' },
-                  checked: { type: 'boolean' },
-                  statusCode: { type: 'integer' },
-                  message: { type: 'string' }
-                }
-              }
-            }
-          }
-        },
-        KeygenResponse: {
-          type: 'object',
-          required: ['publicKey', 'publicKeyFingerprint'],
-          properties: {
-            publicKey: { type: 'string', pattern: '^[A-Za-z0-9+/]{43}=$' },
-            publicKeyFingerprint: { type: 'string' }
-          }
-        },
-        StatusResponse: {
-          type: 'object',
-          additionalProperties: true,
-          required: ['connected', 'raw'],
-          properties: {
-            connected: { type: 'boolean' },
-            raw: { type: 'string' },
-            peerCount: { type: 'integer' }
-          }
-        },
-        KeygenResponse: {
-          type: 'object',
-          required: ['publicKey', 'publicKeyFingerprint'],
-          properties: {
-            publicKey: { type: 'string', pattern: '^[A-Za-z0-9+/]{43}=$' },
-            publicKeyFingerprint: { type: 'string' }
-          }
-        }
-      }
-    },
-    paths: {
-      '/api/config': {
-        get: {
-          summary: 'Get configuration',
-          responses: {
-            '200': {
-              description: 'Current configuration snapshot for UI',
-              content: {
-                'application/json': {
-                  schema: { $ref: '#/components/schemas/ConfigResponse' }
-                }
-              }
-            }
-          }
-        },
-        post: {
-          summary: 'Update configuration',
-          requestBody: {
-            required: true,
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/ConfigUpdateRequest' }
-              }
-            }
-          },
-          responses: {
-            '200': {
-              description: 'Configuration persisted and health recalculated',
-              content: {
-                'application/json': {
-                  schema: { $ref: '#/components/schemas/ConfigUpdateResponse' }
-                }
-              }
-            }
-          }
-        }
-      },
-      '/api/status': {
-        get: {
-          summary: 'Get tunnel runtime status',
-          responses: {
-            '200': {
-              description: 'WireGuard runtime status',
-              content: {
-                'application/json': {
-                  schema: { $ref: '#/components/schemas/StatusResponse' }
-                }
-              }
-            }
-          }
-        }
-      },
-      '/api/keygen': {
-        get: {
-          summary: 'Generate a new WireGuard key pair',
-          responses: {
-            '200': {
-              description: 'Generated key metadata',
-              content: {
-                'application/json': {
-                  schema: { $ref: '#/components/schemas/KeygenResponse' }
-                }
-              }
-            }
-          }
-        }
-      },
-      '/api/health/refresh': {
-        post: { summary: 'Refresh service and VPS health checks now' }
-      },
-      '/api/rotate/prepare': {
-        post: {
-          summary: 'Prepare key rotation and generate rollback script',
-          requestBody: {
-            required: false,
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/RotatePrepareRequest' }
-              }
-            }
-          },
-          responses: {
-            '200': {
-              description: 'Rotation plan created',
-              content: {
-                'application/json': {
-                  schema: { $ref: '#/components/schemas/RotatePrepareResponse' }
-                }
-              }
-            }
-          }
-        }
-      },
-      '/api/rotate/confirm': {
-        post: {
-          summary: 'Confirm or cancel prepared key rotation',
-          requestBody: {
-            required: true,
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/RotateConfirmRequest' }
-              }
-            }
-          },
-          responses: {
-            '200': {
-              description: 'Rotation plan applied or cancelled',
-              content: {
-                'application/json': {
-                  schema: { $ref: '#/components/schemas/RotateConfirmResponse' }
-                }
-              }
-            }
-          }
-        }
-      },
-      '/api/rotate/{planId}': {
-        get: {
-          summary: 'Get prepared rotation plan status',
-          parameters: [
-            {
-              in: 'path',
-              name: 'planId',
-              required: true,
-              schema: { type: 'string' }
-            }
-          ],
-          responses: {
-            '200': {
-              description: 'Rotation plan status',
-              content: {
-                'application/json': {
-                  schema: { $ref: '#/components/schemas/RotateStatusResponse' }
-                }
-              }
-            }
-          }
-        }
-      },
-      '/api/kill-switch/script': {
-        get: {
-          summary: 'Download VPS killswitch script',
-          responses: {
-            '200': {
-              description: 'Script metadata or plain script',
-              content: {
-                'application/json': {
-                  schema: { $ref: '#/components/schemas/KillSwitchScriptResponse' }
-                }
-              }
-            }
-          }
-        }
-      },
-      '/api/vps/targets': {
-        get: {
-          summary: 'List VPS targets with health and active target',
-          responses: {
-            '200': {
-              description: 'VPS targets and current active target',
-              content: {
-                'application/json': {
-                  schema: { $ref: '#/components/schemas/VpsTargetsResponse' }
-                }
-              }
-            }
-          }
-        }
-      },
-      '/api/vps/failover': {
-        post: {
-          summary: 'Trigger automatic failover or force specific target',
-          requestBody: {
-            required: false,
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/VpsFailoverRequest' }
-              }
-            }
-          },
-          responses: {
-            '200': {
-              description: 'Failover result',
-              content: {
-                'application/json': {
-                  schema: { $ref: '#/components/schemas/VpsFailoverResponse' }
-                }
-              }
-            }
-          }
-        }
-      },
-      '/api/vps-setup-script': {
-        get: {
-          summary: 'Generate setup script for current VPS target',
-          parameters: [
-            {
-              in: 'query',
-              name: 'withCrowdsec',
-              required: false,
-              schema: { type: 'string', enum: ['1'] }
-            }
-          ],
-          responses: {
-            '200': {
-              description: 'Setup script payload with hash and selected VPS',
-              content: {
-                'application/json': {
-                  schema: { $ref: '#/components/schemas/VpsSetupScriptResponse' }
-                }
-              }
-            }
-          }
-        }
-      },
-      '/api/audit/verify': {
-        get: {
-          summary: 'Verify audit log hash chain integrity',
-          responses: {
-            '200': {
-              description: 'Audit chain verification report',
-              content: {
-                'application/json': {
-                  schema: { $ref: '#/components/schemas/AuditVerifyResponse' }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  });
+  res.json(openApiDoc);
 });
 
 app.get('/api/kill-switch/script', (req, res) => {
@@ -2665,7 +1748,7 @@ app.post('/api/rotate/confirm', validateBody(RotateConfirmSchema), async (req, r
     cfg.publicKey = plan.next.publicKey;
     cfg.presharedKey = plan.next.presharedKey;
     saveConfig(cfg);
-    const wgConf = generateWgConf(cfg);
+    const wgConf = generateWgConf(cfg, getActiveVpsTarget(cfg));
     if (wgConf) fs.writeFileSync(WG_CONF, wgConf);
   });
 
@@ -2688,6 +1771,20 @@ app.get('/api/rotate/:planId', (req, res) => {
     nextPublicKeyFingerprint: keyFingerprint(plan.next.publicKey),
     scriptSha256: plan.scriptSha256
   });
+});
+
+// ── manejo de errores ────────────────────────────────────────────────────────
+
+// Red de seguridad: cualquier throw síncrono o rechazo reenviado vía next(err)
+// (handlers envueltos en asyncHandler) responde 500 en vez de colgar la request.
+// No expone err.message al cliente para no filtrar contexto sensible.
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  console.error(`[error] ${req.method} ${req.path}: ${err && err.message ? err.message : err}`);
+  try {
+    audit.log({ action: 'request.error', ip: req.ip, path: req.path });
+  } catch {}
+  return res.status(500).json({ error: 'Error interno' });
 });
 
 // ── boot ─────────────────────────────────────────────────────────────────────
@@ -2733,6 +1830,13 @@ module.exports = {
   _internals: {
     keyFingerprint,
     isBlockedServiceTarget,
+    isDisallowedTargetIp,
+    probeServiceTarget,
+    generateVpsScript,
+    generateWgConf,
+    generateCaddyfile,
+    buildKillSwitchScript,
+    buildVpsRotateScript,
     checkServicesHealth,
     validateEmailWithMx,
     buildBackupPayload,

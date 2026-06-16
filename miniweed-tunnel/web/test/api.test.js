@@ -5,6 +5,13 @@ const crypto = require('crypto');
 const zlib = require('zlib');
 
 jest.mock('dns', () => ({
+  lookup: jest.fn((host, opts, cb) => {
+    if (typeof opts === 'function') { cb = opts; opts = {}; }
+    const family = String(host).includes(':') ? 6 : 4;
+    // Passthrough de IPs literales (los tests usan IPs como target de servicio).
+    if (opts && opts.all) return cb(null, [{ address: host, family }]);
+    return cb(null, host, family);
+  }),
   promises: {
     resolveMx: jest.fn(async () => [{ exchange: 'mail.example.com', priority: 10 }]),
     resolve4: jest.fn(async () => ['127.0.0.1'])
@@ -871,6 +878,40 @@ describe('api hardening', () => {
     expect(afterLogout.status).toBe(401);
   });
 
+  test('password change requires auth once a password exists (C1)', async () => {
+    // Bootstrap: primer set sin auth permitido.
+    const first = await req(port, 'POST', '/api/auth/password', JSON.stringify({ password: 'S3gura__pass__123' }), {
+      'Content-Type': 'application/json'
+    });
+    expect(first.status).toBe(200);
+
+    // Intento de cambio SIN auth ni contraseña actual -> rechazado.
+    const unauth = await req(port, 'POST', '/api/auth/password', JSON.stringify({ password: 'Otra__pass__9999' }), {
+      'Content-Type': 'application/json'
+    });
+    expect(unauth.status).toBe(401);
+
+    // La contraseña original sigue siendo válida (no fue sobrescrita).
+    const stillOriginal = await req(port, 'POST', '/api/auth/login', JSON.stringify({ password: 'S3gura__pass__123' }), {
+      'Content-Type': 'application/json'
+    });
+    expect(stillOriginal.status).toBe(200);
+
+    // Cambio con la contraseña actual -> permitido.
+    const withCurrent = await req(port, 'POST', '/api/auth/password', JSON.stringify({
+      password: 'Otra__pass__9999',
+      currentPassword: 'S3gura__pass__123'
+    }), { 'Content-Type': 'application/json' });
+    expect(withCurrent.status).toBe(200);
+
+    // Cambio con token de API -> permitido.
+    const withToken = await req(port, 'POST', '/api/auth/password', JSON.stringify({ password: 'Tercera__pass__777' }), {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(withToken.status).toBe(200);
+  });
+
   test('auth endpoints enforce zod validation', async () => {
     const badSetPwd = await req(port, 'POST', '/api/auth/password', JSON.stringify({ password: 'short' }), {
       'Content-Type': 'application/json',
@@ -1099,6 +1140,39 @@ describe('api hardening', () => {
     expect(Array.isArray(body.issues)).toBe(true);
   });
 
+  test('restore rejects malicious tunnel IP (bash injection vector M4)', async () => {
+    const payload = buildBackupPayloadForTest({
+      'meta.json': JSON.stringify({ ts: new Date().toISOString(), version: 1 }),
+      'config.json': JSON.stringify({
+        tunnelClientIp: '10.8.0.2 -j ACCEPT\nrm -rf /',
+        domain: 'example.com'
+      })
+    }, 'StrongPassphrase__123');
+
+    const restoreBad = await req(port, 'POST', '/api/restore', payload, {
+      'Content-Type': 'application/octet-stream',
+      'x-backup-passphrase': 'StrongPassphrase__123',
+      'x-tunnel-api-token': token
+    });
+    expect(restoreBad.status).toBe(400);
+    expect(JSON.parse(restoreBad.body).error).toContain('no pasa validación');
+  });
+
+  test('VPS script generator sanitizes invalid tunnel IPs (M4 defense in depth)', () => {
+    const mod = require('../server');
+    const script = mod._internals.generateVpsScript(
+      {
+        publicKey: 'A'.repeat(43) + '=',
+        tunnelClientIp: 'evil\nrm -rf /',
+        tunnelServerIp: '10.8.0.1'
+      },
+      { id: 'vps-a', name: 'A', ip: '203.0.113.7', port: 51820 },
+      {}
+    );
+    expect(script).not.toContain('rm -rf');
+    expect(script).toContain('WG_CLIENT_IP=10.8.0.2'); // cae al default seguro
+  });
+
   test('returns kill switch script with sha', async () => {
     const r = await req(port, 'GET', '/api/kill-switch/script', null, {
       'x-tunnel-api-token': token
@@ -1169,5 +1243,110 @@ describe('api hardening', () => {
     });
     expect(health['ok|http://10.0.0.5:8081'].ok).toBe(false);
     expect(health['ok|http://10.0.0.5:8081'].message).toBe('Sin conexion');
+  });
+
+  test('isDisallowedTargetIp blocks loopback/metadata but allows RFC1918 (A2)', () => {
+    const mod = require('../server');
+    const { isDisallowedTargetIp } = mod._internals;
+    // Bloqueados: loopback, metadata cloud, link-local, multicast, unspecified.
+    expect(isDisallowedTargetIp('127.0.0.1')).toBe(true);
+    expect(isDisallowedTargetIp('169.254.169.254')).toBe(true);
+    expect(isDisallowedTargetIp('0.0.0.0')).toBe(true);
+    expect(isDisallowedTargetIp('224.0.0.1')).toBe(true);
+    expect(isDisallowedTargetIp('::1')).toBe(true);
+    expect(isDisallowedTargetIp('fe80::1')).toBe(true);
+    expect(isDisallowedTargetIp('::ffff:127.0.0.1')).toBe(true);
+    // Permitidos: servicios internos legítimos (propósito de la app).
+    expect(isDisallowedTargetIp('10.0.0.5')).toBe(false);
+    expect(isDisallowedTargetIp('172.18.0.3')).toBe(false);
+    expect(isDisallowedTargetIp('192.168.1.10')).toBe(false);
+    expect(isDisallowedTargetIp('8.8.8.8')).toBe(false);
+  });
+
+  test('probeServiceTarget rejects DNS rebinding to metadata (A2)', async () => {
+    const mod = require('../server');
+    const dnsMock = require('dns');
+    // Un host que resuelve a la IP de metadata cloud debe rechazarse en el probe.
+    dnsMock.lookup.mockImplementationOnce((host, opts, cb) => {
+      if (typeof opts === 'function') { cb = opts; opts = {}; }
+      cb(null, [{ address: '169.254.169.254', family: 4 }]);
+    });
+    const result = await mod._internals.probeServiceTarget('http://rebind.example.com/');
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('Destino bloqueado');
+  });
+
+  // ── Caracterización de generadores (red de seguridad para el refactor) ──────
+
+  test('generateWgConf output (con y sin PSK)', () => {
+    const mod = require('../server');
+    const active = { id: 'a', name: 'A', ip: '203.0.113.1', port: 51820, pubKey: crypto.randomBytes(32).toString('base64') };
+    const base = {
+      privateKey: crypto.randomBytes(32).toString('base64'),
+      tunnelClientIp: '10.8.0.2',
+      tunnelServerIp: '10.8.0.1'
+    };
+    const wg = mod._internals.generateWgConf({ ...base }, active);
+    expect(wg).toContain('[Interface]');
+    expect(wg).toContain('Address = 10.8.0.2/32');
+    expect(wg).toContain('Endpoint = 203.0.113.1:51820');
+    expect(wg).toContain('AllowedIPs = 10.8.0.1/32');
+    expect(wg).toContain('PersistentKeepalive = 25');
+    expect(wg).not.toContain('PresharedKey');
+
+    const psk = crypto.randomBytes(32).toString('base64');
+    const wgPsk = mod._internals.generateWgConf({ ...base, presharedKey: psk }, active);
+    expect(wgPsk).toContain(`PresharedKey = ${psk}`);
+
+    // Sin clave privada no genera config.
+    expect(mod._internals.generateWgConf({ ...base, privateKey: '' }, active)).toBeNull();
+  });
+
+  test('generateCaddyfile output (default vs servicios)', () => {
+    const mod = require('../server');
+    // Config incompleta -> Caddyfile por defecto.
+    const def = mod._internals.generateCaddyfile({ services: [] });
+    expect(def).toContain(':80');
+
+    const full = mod._internals.generateCaddyfile({
+      domain: 'home.example.com',
+      acmeEmail: 'ops@example.com',
+      services: [
+        { enabled: true, subdomain: 'nube', target: 'http://10.0.0.5:8096' },
+        { enabled: true, subdomain: 'bad', target: 'http://127.0.0.1:9000' }, // bloqueado (loopback)
+        { enabled: false, subdomain: 'off', target: 'http://10.0.0.6:9001' }  // deshabilitado
+      ]
+    });
+    expect(full).toContain('email ops@example.com');
+    expect(full).toContain('nube.home.example.com {');
+    expect(full).toContain('reverse_proxy http://10.0.0.5:8096');
+    // El target loopback y el deshabilitado no aparecen.
+    expect(full).not.toContain('127.0.0.1');
+    expect(full).not.toContain('10.0.0.6');
+  });
+
+  test('backup roundtrip: build -> restore preserva entradas', () => {
+    const mod = require('../server');
+    const pass = 'StrongPassphrase__123';
+    // Materializa config.json en disco (no existe hasta el primer guardado).
+    mod._internals.saveConfig(mod._internals.loadConfig());
+    const payload = mod._internals.buildBackupPayload(pass, true);
+    expect(Buffer.isBuffer(payload)).toBe(true);
+    expect(payload.slice(0, 4).toString('utf8')).toBe('MWBK');
+
+    const entries = mod._internals.restoreBackupPayload(payload, pass);
+    expect(entries['config.json']).toBeTruthy();
+    expect(entries['meta.json']).toBeTruthy();
+    expect(JSON.parse(entries['meta.json']).version).toBe(1);
+    // El config.json restaurado es JSON válido (cifrado at-rest, pero descifrable).
+    expect(() => JSON.parse(entries['config.json'])).not.toThrow();
+  });
+
+  test('backup restore rechaza passphrase incorrecta y magic inválido', () => {
+    const mod = require('../server');
+    const payload = mod._internals.buildBackupPayload('StrongPassphrase__123', true);
+    expect(() => mod._internals.restoreBackupPayload(payload, 'otra-passphrase-mala')).toThrow();
+    const corrupt = Buffer.concat([Buffer.from('XXXX'), payload.slice(4)]);
+    expect(() => mod._internals.restoreBackupPayload(corrupt, 'StrongPassphrase__123')).toThrow();
   });
 });

@@ -51,6 +51,9 @@ const ConfigSchema = z.object({
   vpsPubKey: OptionalWireGuardKeySchema,
   vpsTargets: z.array(VpsTargetSchema).max(8).optional(),
   activeVpsId: z.union([z.string().min(1).max(64), z.literal('')]).optional(),
+  // Se interpolan en bash/wg0.conf que corre como root: exigir IPv4 estricta.
+  tunnelClientIp: OptionalIpv4OrEmptySchema,
+  tunnelServerIp: OptionalIpv4OrEmptySchema,
   domain: z.string().optional(),
   acmeEmail: OptionalEmailSchema,
   services: z.array(ServiceSchema).max(64).optional()
@@ -83,7 +86,9 @@ const RotateConfirmSchema = z.object({
 });
 
 const AuthPasswordSchema = z.object({
-  password: z.string().min(8).max(128)
+  password: z.string().min(8).max(128),
+  // Requerida para cambiar una contraseña existente sin sesión/token (ver server.js).
+  currentPassword: z.string().min(1).max(128).optional()
 });
 
 const AuthLoginSchema = z.object({
