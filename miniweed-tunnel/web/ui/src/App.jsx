@@ -448,6 +448,11 @@ export function App() {
           <input value={cfg.domain || ''} onInput={e => setField('domain', e.currentTarget.value)} placeholder="home.yourdomain.com" />
           <label>Let's Encrypt email</label>
           <input type="email" value={cfg.acmeEmail || ''} onInput={e => setField('acmeEmail', e.currentTarget.value)} placeholder="you@email.com" />
+          <p className="muted">
+            DNS: point <code>@</code>, <code>www</code> and a wildcard <code>*</code> record
+            to your VPS IP. The wildcard makes every <code>service.yourdomain.com</code> resolve
+            to the VPS. See the setup guide for details.
+          </p>
         </section>
 
         <div className="actions-row">

@@ -31,18 +31,43 @@ through the VPS and travels the encrypted tunnel.
   open in your provider's firewall panel.
 - A domain (and the ability to point a DNS `A` record at the VPS IP).
 
-## Quick start
+## Setup guide
+
+### 1. Rent a VPS
+
+Get a small VPS (Debian/Ubuntu) from any provider (Hetzner, OVH, DigitalOcean,
+Vultr…). The cheapest tier is enough. Note its **public IP** and, in the
+provider's firewall/security-group panel, **open** `TCP 80`, `TCP 443` and
+`UDP 51820`.
+
+### 2. Point your domain's DNS at the VPS
+
+Create these records at your DNS provider, all pointing to the **VPS public IP**:
+
+| Type | Name | Value |
+|------|------|-------|
+| A | `@` | VPS IP (apex / root domain) |
+| A | `www` | VPS IP |
+| A | `*` | VPS IP (**wildcard** — covers every `service.yourdomain.com`) |
+
+The **wildcard `*`** is important: each exposed service uses a subdomain, so the
+wildcard makes all of them resolve to the VPS without adding a record per service.
+(If your DNS host doesn't allow a wildcard `A`, add one `A` record per subdomain
+you expose.)
+
+### 3. Configure the app
 
 1. **Configuration** → *Generate keys*, then enter the VPS public IP and your
    Let's Encrypt email.
-2. **VPS Setup** → copy/download the script and run it as root on the VPS.
-   Verify the printed SHA-256.
+2. **VPS Setup** → copy/download the script and run it as **root** on the VPS.
+   Verify the printed **SHA-256**. The script sets up the tunnel and hardens the
+   server (firewall + rollback, SSH hardening, optional CrowdSec).
 3. Paste the VPS public key (printed by the script) back into **Configuration**
    and save.
 4. **Services** → add a service (subdomain + internal URL) and save.
-5. Point your subdomain's DNS `A` record at the VPS IP.
 
-Open `https://<your-subdomain>` — it should load your internal service over HTTPS.
+Open `https://<subdomain>.yourdomain.com` — it should load your internal service
+over HTTPS (the certificate is issued automatically on first request).
 
 ## Features
 

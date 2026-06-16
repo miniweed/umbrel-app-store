@@ -3,7 +3,7 @@ id: miniweed-tunnel
 name: Tunnel
 tagline: Expose your server to the world without touching your router
 category: networking
-version: "1.6.37"
+version: "1.6.38"
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.svg
 port: 3016
 description: >-
@@ -11,6 +11,17 @@ description: >-
   opening ports on your router. A 100% self-hosted alternative to Cloudflare Tunnel.
   Works behind CGNAT. Uses WireGuard for end-to-end encryption and Caddy for
   automatic HTTPS with Let's Encrypt.
+
+
+  The app generates a one-command script that not only sets up the tunnel on your
+  VPS but also hardens it: a restrictive firewall (with rollback), SSH hardening
+  with lockout protection, and optional CrowdSec. Every script shows a SHA-256 you
+  can verify before running it.
+
+
+  You'll need a small VPS and a domain. Full step-by-step setup guide (renting the
+  VPS and the required DNS records, including the wildcard):
+  https://github.com/miniweed/umbrel-app-store/blob/main/miniweed-tunnel/README.md
 developer: miniweed
 website: https://github.com/miniweed/umbrel-app-store
 repo: https://github.com/miniweed/umbrel-app-store
