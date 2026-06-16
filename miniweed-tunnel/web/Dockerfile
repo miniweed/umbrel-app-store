@@ -11,6 +11,7 @@ RUN npm install --production
 
 COPY server.js ./
 COPY api-spec ./api-spec
+COPY config ./config
 COPY lib ./lib
 COPY public ./public
 COPY docker-entrypoint.sh ./
