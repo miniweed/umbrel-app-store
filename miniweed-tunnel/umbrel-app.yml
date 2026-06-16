@@ -3,7 +3,7 @@ id: miniweed-tunnel
 name: Tunnel
 tagline: Expón tu servidor al mundo sin tocar el router
 category: networking
-version: "1.6.31"
+version: "1.6.32"
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.svg
 port: 3016
 description: >-
@@ -17,10 +17,10 @@ repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
 releaseNotes: >-
-  Login propio con contraseña y sesiones. Nueva UI: failover y multi-VPS,
-  rotación segura de claves, kill-switch, backup/restore cifrado y gestión de
-  claves CLI. Endurecimiento de seguridad (anti-fuerza-bruta, anti-SSRF en
-  health checks, validación reforzada) y mayor robustez del backend.
+  Arregla Caddy, que no arrancaba (el chequeo de arranque no enviaba el token
+  al wg-api), por lo que los servicios HTTPS no se publicaban. Incluye el icono
+  de la app y, de versiones recientes: login propio, failover/multi-VPS,
+  rotación de claves, kill-switch, backup/restore y endurecimiento de seguridad.
 dependencies: []
 path: ""
 defaultUsername: ""

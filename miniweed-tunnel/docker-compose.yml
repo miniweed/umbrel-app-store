@@ -9,7 +9,7 @@ services:
       PROXY_AUTH_ADD: "true"
 
   web:
-    image: ghcr.io/miniweed/umbrel-tunnel-web:1.6.31
+    image: ghcr.io/miniweed/umbrel-tunnel-web:1.6.32
     restart: on-failure
     stop_grace_period: 30s
     cap_drop:
@@ -44,11 +44,12 @@ services:
       - ${APP_DATA_DIR}/caddy/config:/config
     environment:
       - XDG_DATA_HOME=/data/caddy
+      - WG_API_TOKEN=${APP_SEED}
     command:
       - sh
       - -c
       - |
-        until [ -s /data/Caddyfile ] && wget -q -O - http://127.0.0.1:8080/status >/dev/null 2>&1; do
+        until [ -s /data/Caddyfile ] && wget -q --header="x-wg-api-token: $$WG_API_TOKEN" -O - http://127.0.0.1:8080/status >/dev/null 2>&1; do
           echo "[caddy] Waiting for Caddyfile and WireGuard API..."
           sleep 2
         done
