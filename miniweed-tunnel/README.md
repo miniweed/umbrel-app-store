@@ -46,14 +46,15 @@ Open `https://<your-subdomain>` — it should load your internal service over HT
 
 ## Features
 
-- **Built-in login** (password + sessions) on top of Umbrel's app proxy.
-- **Multi-VPS & failover** — keep several VPS targets and fail over automatically
-  to the healthy one with the highest priority, or switch manually.
+- **One-command VPS setup** with a generated, SHA-256-verifiable script.
+- **Automatic HTTPS** for each exposed service via Caddy + Let's Encrypt.
+- **Per-service health checks** shown in the dashboard.
 - **Secure key rotation** — rotate WireGuard keys without breaking the tunnel.
 - **Emergency kill-switch** — one script to stop the tunnel and block the port.
-- **Encrypted backup / restore** of your configuration.
-- **CLI access** via ed25519 public-key challenge.
 - **Optional CrowdSec** hardening on the VPS.
+
+Access to the panel is protected by your Umbrel account (the app runs behind
+Umbrel's authenticated app proxy).
 
 ## Security
 
@@ -63,16 +64,9 @@ Open `https://<your-subdomain>` — it should load your internal service over HT
 - The generated VPS script hardens SSH (with lockout protection), sets up a
   restrictive firewall with a rollback, and prints a SHA-256 you can verify
   before running it.
-- Anti-brute-force throttling, anti-SSRF checks on health probes, and strict
-  input validation on the API.
+- Anti-SSRF checks on health probes and strict input validation on the API.
 
 See [SECURITY.md](SECURITY.md) to report issues.
-
-## CLI / advanced
-
-Authentication via ed25519 public key, assisted key rotation and the remote
-kill-switch can also be driven from the command line. See
-[`docs/cli.md`](docs/cli.md) for the full reference.
 
 ## Repository layout
 

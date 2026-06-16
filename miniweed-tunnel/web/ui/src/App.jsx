@@ -1,27 +1,14 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import {
-  addPubkey,
-  createBackup,
-  getAuthStatus,
   getConfig,
   getKillSwitchScript,
-  getPubkeys,
-  getSessions,
   getStatus,
   getVpsSetupScript,
-  getVpsTargets,
   keygen,
-  login,
-  logout,
   refreshHealth,
-  removePubkey,
-  restoreBackup,
-  revokeSession,
   rotateConfirm,
   rotatePrepare,
-  saveConfig,
-  setPassword,
-  triggerFailover
+  saveConfig
 } from './api.js';
 
 const TAB_ITEMS = [
@@ -29,7 +16,7 @@ const TAB_ITEMS = [
   { key: 'services', label: 'Services' },
   { key: 'config', label: 'Configuration' },
   { key: 'vps', label: 'VPS Setup' },
-  { key: 'optional', label: 'Advanced' }
+  { key: 'advanced', label: 'Advanced' }
 ];
 
 const EMPTY_SERVICE = { name: '', subdomain: '', target: '', enabled: true };
@@ -77,32 +64,11 @@ export function App() {
   const [scriptMeta, setScriptMeta] = useState(null);
   const [scriptReloadMsg, setScriptReloadMsg] = useState('');
   const [scriptCopied, setScriptCopied] = useState(false);
-  const [vpsTargets, setVpsTargets] = useState(null);
-  const [activeVpsId, setActiveVpsId] = useState('');
-  const [vpsBusy, setVpsBusy] = useState('');
   const [healthBusy, setHealthBusy] = useState(false);
-  // Session gating: 'loading' | 'login' | 'ready'
-  const [gate, setGate] = useState('loading');
-  const [authStatus, setAuthStatus] = useState({ hasPassword: false, authenticated: false });
-  const [loginPassword, setLoginPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [sessions, setSessions] = useState(null);
-  const [rotation, setRotation] = useState(null); // rotation plan in progress
+  const [rotation, setRotation] = useState(null);
   const [rotationBusy, setRotationBusy] = useState(false);
   const [killSwitch, setKillSwitch] = useState(null);
   const [killSwitchBusy, setKillSwitchBusy] = useState(false);
-  const [pubkeys, setPubkeys] = useState(null);
-  const [newPubkeyName, setNewPubkeyName] = useState('');
-  const [newPubkeyValue, setNewPubkeyValue] = useState('');
-  const [pubkeyBusy, setPubkeyBusy] = useState(false);
-  const [pwdCurrent, setPwdCurrent] = useState('');
-  const [pwdNew, setPwdNew] = useState('');
-  const [pwdBusy, setPwdBusy] = useState(false);
-  const [backupPass, setBackupPass] = useState('');
-  const [backupBusy, setBackupBusy] = useState(false);
-  const [restorePass, setRestorePass] = useState('');
-  const [restoreFile, setRestoreFile] = useState(null);
-  const [restoreBusy, setRestoreBusy] = useState(false);
 
   const setupIncomplete = !cfg.publicKey || !cfg.vpsPubKey || !cfg.vpsIp;
   const scriptMissingPublicKey = !cfg.publicKey;
@@ -150,39 +116,6 @@ export function App() {
     }
   }
 
-  async function loadVpsTargets() {
-    try {
-      const data = await getVpsTargets();
-      setVpsTargets(Array.isArray(data?.targets) ? data.targets : []);
-      setActiveVpsId(data?.activeVpsId || '');
-    } catch (err) {
-      setVpsTargets([]);
-      setMessage({ text: err.message || 'Could not load VPS targets.', kind: 'error' });
-    }
-  }
-
-  async function onFailover(targetId) {
-    const label = targetId ? 'change the active VPS' : 'run automatic failover';
-    if (!window.confirm(`Are you sure you want to ${label}? The tunnel will be reconfigured.`)) return;
-    setVpsBusy(targetId || 'auto');
-    setMessage({ text: '', kind: '' });
-    try {
-      const res = await triggerFailover(targetId);
-      await loadVpsTargets();
-      const to = res?.next?.name || res?.next?.id || res?.activeVpsId || '';
-      setMessage({
-        text: res?.switched === false
-          ? 'No VPS switch was needed.'
-          : `Active VPS updated${to ? `: ${to}` : ''}.`,
-        kind: 'success'
-      });
-    } catch (err) {
-      setMessage({ text: err.message || 'Could not switch VPS.', kind: 'error' });
-    } finally {
-      setVpsBusy('');
-    }
-  }
-
   async function onRefreshHealth() {
     setHealthBusy(true);
     setMessage({ text: '', kind: '' });
@@ -196,117 +129,6 @@ export function App() {
       setHealthBusy(false);
     }
   }
-
-  async function bootstrap() {
-    try {
-      setAuthStatus(await getAuthStatus());
-    } catch {
-      // status unavailable: continue, the gate is decided by the config load
-    }
-    try {
-      await Promise.all([refreshConfigOnly(), refreshStatusOnly()]);
-      setGate('ready');
-    } catch (err) {
-      if (err.status === 401) {
-        setGate('login');
-      } else {
-        // Non-auth error (e.g. backend down): show the app anyway.
-        setGate('ready');
-        setMessage({ text: err.message || 'Could not load configuration.', kind: 'error' });
-      }
-    }
-  }
-
-  async function onLogin(e) {
-    if (e && e.preventDefault) e.preventDefault();
-    setLoading(true);
-    setMessage({ text: '', kind: '' });
-    try {
-      await login(loginPassword);
-      setLoginPassword('');
-      setGate('ready');
-      setAuthStatus(s => ({ ...s, authenticated: true }));
-      await refreshAll();
-    } catch (err) {
-      setMessage({ text: err.message || 'Could not sign in.', kind: 'error' });
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function onSetInitialPassword(e) {
-    if (e && e.preventDefault) e.preventDefault();
-    if (loginPassword.length < 8) {
-      setMessage({ text: 'The password must be at least 8 characters.', kind: 'error' });
-      return;
-    }
-    if (loginPassword !== confirmPassword) {
-      setMessage({ text: 'Passwords do not match.', kind: 'error' });
-      return;
-    }
-    setLoading(true);
-    setMessage({ text: '', kind: '' });
-    try {
-      await setPassword(loginPassword);
-      await login(loginPassword);
-      setLoginPassword('');
-      setConfirmPassword('');
-      setGate('ready');
-      setAuthStatus({ hasPassword: true, authenticated: true });
-      await refreshAll();
-    } catch (err) {
-      setMessage({ text: err.message || 'Could not create the password.', kind: 'error' });
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function onLogout() {
-    if (!window.confirm('Sign out?')) return;
-    try {
-      await logout();
-    } catch {
-      // ignore: we go back to login regardless
-    }
-    setAuthStatus(s => ({ ...s, authenticated: false }));
-    setGate('login');
-  }
-
-  async function loadSessions() {
-    try {
-      const data = await getSessions();
-      setSessions(Array.isArray(data?.sessions) ? data.sessions : []);
-    } catch (err) {
-      setSessions([]);
-      setMessage({ text: err.message || 'Could not load sessions.', kind: 'error' });
-    }
-  }
-
-  async function onRevokeSession(id, isCurrent) {
-    if (!window.confirm(isCurrent ? 'This is your current session. Close it?' : 'Revoke this session?')) return;
-    try {
-      await revokeSession(id);
-      if (isCurrent) {
-        setAuthStatus(s => ({ ...s, authenticated: false }));
-        setGate('login');
-        return;
-      }
-      await loadSessions();
-      setMessage({ text: 'Session revoked.', kind: 'success' });
-    } catch (err) {
-      setMessage({ text: err.message || 'Could not revoke the session.', kind: 'error' });
-    }
-  }
-
-  useEffect(() => {
-    bootstrap();
-  }, []);
-
-  useEffect(() => {
-    if (gate !== 'ready') return undefined;
-    const timer = setInterval(refreshStatusOnly, 8000);
-    return () => clearInterval(timer);
-  }, [gate]);
 
   async function onRotatePrepare() {
     if (!window.confirm(
@@ -367,130 +189,15 @@ export function App() {
     URL.revokeObjectURL(url);
   }
 
-  async function loadPubkeys() {
-    try {
-      const data = await getPubkeys();
-      setPubkeys(Array.isArray(data?.pubkeys) ? data.pubkeys : []);
-    } catch (err) {
-      setPubkeys([]);
-      setMessage({ text: err.message || 'Could not load keys.', kind: 'error' });
-    }
-  }
-
-  async function onAddPubkey(e) {
-    if (e && e.preventDefault) e.preventDefault();
-    if (!newPubkeyName.trim() || !newPubkeyValue.trim()) return;
-    setPubkeyBusy(true);
-    setMessage({ text: '', kind: '' });
-    try {
-      await addPubkey(newPubkeyName.trim(), newPubkeyValue.trim());
-      setNewPubkeyName('');
-      setNewPubkeyValue('');
-      await loadPubkeys();
-      setMessage({ text: 'Key added.', kind: 'success' });
-    } catch (err) {
-      setMessage({ text: err.message || 'Could not add the key.', kind: 'error' });
-    } finally {
-      setPubkeyBusy(false);
-    }
-  }
-
-  async function onRemovePubkey(id, name) {
-    if (!window.confirm(`Revoke the key "${name || id}"?`)) return;
-    try {
-      await removePubkey(id);
-      await loadPubkeys();
-      setMessage({ text: 'Key revoked.', kind: 'success' });
-    } catch (err) {
-      setMessage({ text: err.message || 'Could not revoke the key.', kind: 'error' });
-    }
-  }
-
-  async function onChangePassword(e) {
-    if (e && e.preventDefault) e.preventDefault();
-    if (pwdNew.length < 8) {
-      setMessage({ text: 'The new password must be at least 8 characters.', kind: 'error' });
-      return;
-    }
-    setPwdBusy(true);
-    setMessage({ text: '', kind: '' });
-    try {
-      // An active session is enough; we send currentPassword just in case.
-      await setPassword(pwdNew, pwdCurrent || undefined);
-      setPwdCurrent('');
-      setPwdNew('');
-      setMessage({ text: 'Password updated. All other sessions were signed out.', kind: 'success' });
-      await loadSessions();
-    } catch (err) {
-      setMessage({ text: err.message || 'Could not change the password.', kind: 'error' });
-    } finally {
-      setPwdBusy(false);
-    }
-  }
-
-  async function onCreateBackup(e) {
-    if (e && e.preventDefault) e.preventDefault();
-    if (backupPass.length < 12) {
-      setMessage({ text: 'The backup passphrase must be at least 12 characters.', kind: 'error' });
-      return;
-    }
-    setBackupBusy(true);
-    setMessage({ text: '', kind: '' });
-    try {
-      const blob = await createBackup(backupPass, true);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `miniweed-backup-${Date.now()}.bak`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      setBackupPass('');
-      setMessage({ text: 'Backup downloaded.', kind: 'success' });
-    } catch (err) {
-      setMessage({ text: err.message || 'Could not create the backup.', kind: 'error' });
-    } finally {
-      setBackupBusy(false);
-    }
-  }
-
-  async function onRestoreBackup(e) {
-    if (e && e.preventDefault) e.preventDefault();
-    if (!restoreFile) {
-      setMessage({ text: 'Select a backup file.', kind: 'error' });
-      return;
-    }
-    if (restorePass.length < 12) {
-      setMessage({ text: 'Enter the backup passphrase (min. 12).', kind: 'error' });
-      return;
-    }
-    if (!window.confirm('Restoring will overwrite the current configuration. Continue?')) return;
-    setRestoreBusy(true);
-    setMessage({ text: '', kind: '' });
-    try {
-      const buffer = await restoreFile.arrayBuffer();
-      await restoreBackup(buffer, restorePass);
-      setRestorePass('');
-      setRestoreFile(null);
-      await refreshAll();
-      setMessage({ text: 'Backup restored successfully.', kind: 'success' });
-    } catch (err) {
-      setMessage({ text: err.message || 'Could not restore the backup.', kind: 'error' });
-    } finally {
-      setRestoreBusy(false);
-    }
-  }
+  useEffect(() => {
+    refreshAll();
+    const timer = setInterval(refreshStatusOnly, 8000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
-    if (gate !== 'ready') return;
     if (tab === 'vps') loadVpsScript();
-    if (tab === 'optional') {
-      loadVpsTargets();
-      loadSessions();
-      loadPubkeys();
-    }
-  }, [tab, vpsScriptWithCrowdsec, gate]);
+  }, [tab, vpsScriptWithCrowdsec]);
 
   const statusBadge = useMemo(() => {
     if (status.connected) return { cls: 'connected', text: 'Connected' };
@@ -618,15 +325,7 @@ export function App() {
   function onDownloadScript() {
     const script = scriptMeta?.script || '';
     if (!script) return;
-    const blob = new Blob([`${script}\n`], { type: 'text/x-shellscript;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = scriptMeta?.filename || 'miniweed-tunnel-vps-setup.sh';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    downloadText(scriptMeta?.filename || 'miniweed-tunnel-vps-setup.sh', script);
   }
 
   function renderDashboard() {
@@ -759,67 +458,9 @@ export function App() {
     );
   }
 
-  function renderVpsHealth(health) {
-    if (!health) return <span className="health-pill">No data</span>;
-    if (health.ok) return <span className="health-pill ok">Healthy</span>;
-    return <span className="health-pill error">{health.message || 'No connection'}</span>;
-  }
-
-  function renderOptionalConfig() {
+  function renderAdvanced() {
     return (
       <>
-        <section className="panel">
-          <h2>Failover & multiple VPS</h2>
-          <p className="muted">
-            Status of candidate VPS targets. You can force the active VPS or trigger automatic
-            failover to the healthy candidate with the highest priority.
-          </p>
-          <div className="actions-row">
-            <button className="btn" onClick={loadVpsTargets} disabled={Boolean(vpsBusy)}>Refresh status</button>
-            <button
-              className="btn btn-primary"
-              onClick={() => onFailover('')}
-              disabled={Boolean(vpsBusy)}
-            >
-              {vpsBusy === 'auto' ? 'Evaluating…' : 'Automatic failover'}
-            </button>
-          </div>
-
-          {vpsTargets === null ? (
-            <p className="muted">Loading VPS…</p>
-          ) : vpsTargets.length === 0 ? (
-            <div className="alert alert-info">
-              No VPS configured. Add the VPS IP and key in Configuration.
-            </div>
-          ) : (
-            <div className="vps-list">
-              {vpsTargets.map(t => {
-                const isActive = t.id === activeVpsId;
-                return (
-                  <div key={t.id} className={`vps-row ${isActive ? 'active' : ''}`}>
-                    <div className="vps-row-main">
-                      <strong>{t.name || t.id}</strong>
-                      {isActive ? <span className="duplicate-badge">active</span> : null}
-                      <span className="muted">{t.ip || 'no IP'}:{t.port || 51820}</span>
-                    </div>
-                    <div className="vps-row-meta">
-                      {renderVpsHealth(t.health)}
-                      <span className="muted">priority {typeof t.priority === 'number' ? t.priority : '—'}</span>
-                      <button
-                        className="btn"
-                        disabled={isActive || Boolean(vpsBusy) || !t.enabled || !t.ip || !t.pubKey}
-                        onClick={() => onFailover(t.id)}
-                      >
-                        {vpsBusy === t.id ? 'Switching…' : 'Activate'}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
-
         <section className="panel">
           <h2>Emergency kill-switch</h2>
           <p className="muted">
@@ -842,115 +483,6 @@ export function App() {
               <p className="muted">SHA-256: <code>{killSwitch.sha256 || '-'}</code></p>
             </>
           ) : null}
-        </section>
-
-        <section className="panel">
-          <h2>Active sessions</h2>
-          <p className="muted">Devices with an active session. You can revoke any of them.</p>
-          <div className="actions-row">
-            <button className="btn" onClick={loadSessions}>Refresh</button>
-          </div>
-          {sessions === null ? (
-            <p className="muted">Loading sessions…</p>
-          ) : sessions.length === 0 ? (
-            <p className="muted">No active sessions (or authentication is disabled).</p>
-          ) : (
-            <div className="vps-list">
-              {sessions.map(s => (
-                <div key={s.id} className={`vps-row ${s.current ? 'active' : ''}`}>
-                  <div className="vps-row-main">
-                    <strong>{s.source || 'session'}</strong>
-                    {s.current ? <span className="duplicate-badge">this session</span> : null}
-                    <span className="muted">{s.ip || 'unknown ip'}</span>
-                  </div>
-                  <div className="vps-row-meta">
-                    <span className="muted">expires {new Date(s.expiresAt).toLocaleString()}</span>
-                    <button className="btn btn-danger" onClick={() => onRevokeSession(s.id, s.current)}>
-                      {s.current ? 'Sign out' : 'Revoke'}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="panel">
-          <h2>Change password</h2>
-          <form onSubmit={onChangePassword}>
-            <label htmlFor="pwd-current">Current password (optional if signed in)</label>
-            <input id="pwd-current" type="password" autoComplete="current-password" value={pwdCurrent} onInput={e => setPwdCurrent(e.currentTarget.value)} />
-            <label htmlFor="pwd-new">New password</label>
-            <input id="pwd-new" type="password" autoComplete="new-password" value={pwdNew} onInput={e => setPwdNew(e.currentTarget.value)} />
-            <p className="muted">Minimum 8 characters. Changing it signs out all other sessions.</p>
-            <div className="actions-row">
-              <button className="btn btn-primary" type="submit" disabled={pwdBusy || !pwdNew}>
-                {pwdBusy ? 'Saving…' : 'Change password'}
-              </button>
-            </div>
-          </form>
-        </section>
-
-        <section className="panel">
-          <h2>CLI access keys</h2>
-          <p className="muted">Public keys (ed25519) authorized for command-line authentication.</p>
-          <form onSubmit={onAddPubkey}>
-            <label htmlFor="pk-name">Name</label>
-            <input id="pk-name" value={newPubkeyName} onInput={e => setNewPubkeyName(e.currentTarget.value)} placeholder="laptop-cli" />
-            <label htmlFor="pk-value">Public key</label>
-            <input id="pk-value" value={newPubkeyValue} onInput={e => setNewPubkeyValue(e.currentTarget.value)} placeholder="ssh-ed25519 AAAA… or DER base64" />
-            <div className="actions-row">
-              <button className="btn" type="submit" disabled={pubkeyBusy || !newPubkeyName || !newPubkeyValue}>
-                {pubkeyBusy ? 'Adding…' : 'Add key'}
-              </button>
-            </div>
-          </form>
-          {pubkeys === null ? (
-            <p className="muted">Loading keys…</p>
-          ) : pubkeys.length === 0 ? (
-            <p className="muted">No CLI keys registered.</p>
-          ) : (
-            <div className="vps-list">
-              {pubkeys.map(k => (
-                <div key={k.id} className="vps-row">
-                  <div className="vps-row-main">
-                    <strong>{k.name || k.id}</strong>
-                    <span className="muted">id {k.id}</span>
-                  </div>
-                  <div className="vps-row-meta">
-                    {k.addedAt ? <span className="muted">added {new Date(k.addedAt).toLocaleDateString()}</span> : null}
-                    <button className="btn btn-danger" onClick={() => onRemovePubkey(k.id, k.name)}>Revoke</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="panel">
-          <h2>Backup & restore</h2>
-          <p className="muted">Encrypted copy of your configuration. Keep the passphrase: without it the backup cannot be restored.</p>
-          <form onSubmit={onCreateBackup}>
-            <label htmlFor="backup-pass">Backup passphrase (min. 12)</label>
-            <input id="backup-pass" type="password" value={backupPass} onInput={e => setBackupPass(e.currentTarget.value)} />
-            <div className="actions-row">
-              <button className="btn btn-primary" type="submit" disabled={backupBusy || backupPass.length < 12}>
-                {backupBusy ? 'Generating…' : 'Download backup'}
-              </button>
-            </div>
-          </form>
-          <hr className="sep" />
-          <form onSubmit={onRestoreBackup}>
-            <label htmlFor="restore-file">Backup file (.bak)</label>
-            <input id="restore-file" type="file" accept=".bak" onChange={e => setRestoreFile(e.currentTarget.files?.[0] || null)} />
-            <label htmlFor="restore-pass">Backup passphrase</label>
-            <input id="restore-pass" type="password" value={restorePass} onInput={e => setRestorePass(e.currentTarget.value)} />
-            <div className="actions-row">
-              <button className="btn btn-danger" type="submit" disabled={restoreBusy || !restoreFile}>
-                {restoreBusy ? 'Restoring…' : 'Restore'}
-              </button>
-            </div>
-          </form>
         </section>
       </>
     );
@@ -1045,69 +577,9 @@ export function App() {
     );
   }
 
-  function renderLogin() {
-    const firstRun = !authStatus.hasPassword;
-    return (
-      <main className="shell">
-        <header className="hero">
-          <div>
-            <h1>Umbrel Tunnel</h1>
-            <p className="muted">Secure channel for sovereign infrastructure.</p>
-          </div>
-        </header>
-        <div aria-live="polite" role="status">
-          {message.text ? <div className={`alert ${message.kind === 'error' ? 'alert-error' : 'alert-success'}`}>{message.text}</div> : null}
-        </div>
-        <section className="panel">
-          <h2>{firstRun ? 'Create a password' : 'Sign in'}</h2>
-          <form onSubmit={firstRun ? onSetInitialPassword : onLogin}>
-            <label htmlFor="login-password">Password</label>
-            <input
-              id="login-password"
-              type="password"
-              autoComplete={firstRun ? 'new-password' : 'current-password'}
-              value={loginPassword}
-              onInput={e => setLoginPassword(e.currentTarget.value)}
-            />
-            {firstRun ? (
-              <>
-                <label htmlFor="login-confirm">Repeat the password</label>
-                <input
-                  id="login-confirm"
-                  type="password"
-                  autoComplete="new-password"
-                  value={confirmPassword}
-                  onInput={e => setConfirmPassword(e.currentTarget.value)}
-                />
-                <p className="muted">Minimum 8 characters. It will be required to access the dashboard.</p>
-              </>
-            ) : null}
-            <div className="actions-row">
-              <button className="btn btn-primary" type="submit" disabled={loading || !loginPassword}>
-                {loading ? 'Processing…' : (firstRun ? 'Create and enter' : 'Sign in')}
-              </button>
-            </div>
-          </form>
-        </section>
-      </main>
-    );
-  }
-
-  if (gate === 'loading') {
-    return (
-      <main className="shell">
-        <div className="muted">Loading…</div>
-      </main>
-    );
-  }
-
-  if (gate === 'login') {
-    return renderLogin();
-  }
-
   let content = renderDashboard();
   if (tab === 'config') content = renderConfig();
-  if (tab === 'optional') content = renderOptionalConfig();
+  if (tab === 'advanced') content = renderAdvanced();
   if (tab === 'services') content = renderServices();
   if (tab === 'vps') content = renderVps();
 
@@ -1118,14 +590,9 @@ export function App() {
           <h1>Umbrel Tunnel</h1>
           <p className="muted">Secure channel for sovereign infrastructure.</p>
         </div>
-        <div className="hero-right">
-          <div className={`status-badge ${statusBadge.cls}`}>
-            <span className="dot" />
-            <span>{statusBadge.text}</span>
-          </div>
-          {authStatus.authenticated ? (
-            <button className="btn btn-logout" onClick={onLogout}>Sign out</button>
-          ) : null}
+        <div className={`status-badge ${statusBadge.cls}`}>
+          <span className="dot" />
+          <span>{statusBadge.text}</span>
         </div>
       </header>
 

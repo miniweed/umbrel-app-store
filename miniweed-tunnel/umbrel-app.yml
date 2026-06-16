@@ -3,7 +3,7 @@ id: miniweed-tunnel
 name: Tunnel
 tagline: Expose your server to the world without touching your router
 category: networking
-version: "1.6.36"
+version: "1.6.37"
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.svg
 port: 3016
 description: >-
@@ -17,9 +17,11 @@ repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
 releaseNotes: >-
-  Fixes a regression in 1.6.35 where updating asked to create the password again
-  (the web container ran as a non-root user that could not access existing data).
-  Your configuration and password are preserved. Also includes the full English UI.
+  Streamlined for simplicity: access is now protected by your Umbrel account, so
+  the separate in-app login was removed. Multi-VPS/failover, CLI access keys and
+  in-app backup/restore were removed to keep the app focused on a single VPS.
+  Core flow (keys, VPS setup, services, HTTPS, key rotation, kill-switch) and the
+  full English UI remain.
 dependencies: []
 path: ""
 defaultUsername: ""

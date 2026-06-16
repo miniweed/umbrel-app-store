@@ -18,8 +18,8 @@ to the chosen internal service. The home router never opens a port.
   before running, hardens SSH with lockout protection, configures a restrictive
   firewall with a rollback, and ships an emergency kill-switch.
 - Secrets (WireGuard keys) are **encrypted at rest**; the audit log is a
-  tamper-evident hash chain. The app adds its own password login on top of the
-  Umbrel app proxy.
+  tamper-evident hash chain. Access to the panel is protected by Umbrel's
+  authenticated app proxy (`PROXY_AUTH_ADD: true`).
 - All images are pinned by multi-arch digest.
 
 ### Testing

@@ -49,8 +49,8 @@ function generateVpsScript(cfg, target, options = {}) {
     : '';
   const crowdsecBlock = withCrowdsec
     ? `
-# CrowdSec opcional
-echo "Instalando CrowdSec..."
+# Optional CrowdSec
+echo "Installing CrowdSec..."
 if ! command -v curl >/dev/null 2>&1; then
   apt-get -o DPkg::Lock::Timeout=300 install -y -qq curl ca-certificates
 fi

@@ -32,16 +32,6 @@ const ServiceSchema = z.object({
   enabled: z.boolean().optional()
 });
 
-const VpsTargetSchema = z.object({
-  id: z.string().min(1).max(64).optional(),
-  name: z.string().min(1).max(64).optional(),
-  ip: OptionalIpv4OrEmptySchema,
-  port: z.number().int().min(1).max(65535).optional(),
-  pubKey: OptionalWireGuardKeySchema,
-  enabled: z.boolean().optional(),
-  priority: z.number().int().min(0).max(99).optional()
-});
-
 const ConfigSchema = z.object({
   privateKey: OptionalPrivateKeyUpdateSchema,
   publicKey: OptionalWireGuardKeySchema,
@@ -49,9 +39,7 @@ const ConfigSchema = z.object({
   vpsIp: OptionalIpv4OrEmptySchema,
   vpsPort: z.number().int().min(1).max(65535).optional(),
   vpsPubKey: OptionalWireGuardKeySchema,
-  vpsTargets: z.array(VpsTargetSchema).max(8).optional(),
-  activeVpsId: z.union([z.string().min(1).max(64), z.literal('')]).optional(),
-  // Se interpolan en bash/wg0.conf que corre como root: exigir IPv4 estricta.
+  // Interpolated into bash/wg0.conf that runs as root: require strict IPv4.
   tunnelClientIp: OptionalIpv4OrEmptySchema,
   tunnelServerIp: OptionalIpv4OrEmptySchema,
   domain: z.string().optional(),
@@ -85,22 +73,9 @@ const RotateConfirmSchema = z.object({
   apply: z.boolean().optional()
 });
 
-const AuthPasswordSchema = z.object({
-  password: z.string().min(8).max(128),
-  // Requerida para cambiar una contraseña existente sin sesión/token (ver server.js).
-  currentPassword: z.string().min(1).max(128).optional()
-});
-
-const AuthLoginSchema = z.object({
-  password: z.string().min(1).max(128)
-});
-
 module.exports = {
   ServiceSchema,
-  VpsTargetSchema,
   ConfigSchema,
   RotatePrepareSchema,
-  RotateConfirmSchema,
-  AuthPasswordSchema,
-  AuthLoginSchema
+  RotateConfirmSchema
 };
