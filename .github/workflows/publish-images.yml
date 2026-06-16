@@ -4,6 +4,12 @@ name: publish-images
   push:
     branches:
       - main
+    paths:
+      - miniweed-tunnel/web/**
+      - miniweed-tunnel/wg-client/**
+      - miniweed-tunnel/umbrel-app.yml
+      - miniweed-tunnel/docker-compose.yml
+      - .github/workflows/publish-images.yml
   workflow_dispatch:
 
 permissions:
