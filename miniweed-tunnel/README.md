@@ -1,184 +1,96 @@
 # Tunnel
 
-Tunnel expone servicios internos de Umbrel mediante un VPS propio usando WireGuard + Caddy.
+Expose your Umbrel services to the internet through **your own VPS** — no router
+port-forwarding, works behind CGNAT. A 100% self-hosted alternative to Cloudflare
+Tunnel, built on **WireGuard** (end-to-end encryption) and **Caddy** (automatic
+HTTPS with Let's Encrypt).
 
-## Flujo básico
+## How it works
 
-1. Genera claves WireGuard desde la UI.
-2. Configura IP del VPS.
-3. Descarga y ejecuta el script de setup en el VPS.
-4. Pega la clave pública del VPS en la UI y guarda.
-
-## Auth por clave pública (CLI)
-
-El backend acepta claves `ssh-ed25519` (OpenSSH) o DER/SPKI base64.
-
-### 1) Registrar clave pública
-
-```bash
-API_URL="http://umbrel.local:3016"
-API_TOKEN="<token_api>"
-KEY_NAME="laptop-cli"
-PUBKEY="$(cat ~/.ssh/id_ed25519.pub)"
-
-curl -sS -X POST "$API_URL/api/auth/pubkeys" \
-  -H "Content-Type: application/json" \
-  -H "x-tunnel-api-token: $API_TOKEN" \
-  -d "{\"name\":\"$KEY_NAME\",\"publicKey\":\"$PUBKEY\"}"
+```
+            HTTPS (443)                WireGuard tunnel
+ Internet ───────────────►  VPS  ◄════════════════════►  Umbrel
+ user                    (public IP)                    (Caddy + your apps)
+                          Caddy/iptables                reverse_proxy → app
 ```
 
-Guarda el `keyId` de la respuesta.
+1. The app generates a WireGuard key pair on your Umbrel.
+2. You run a setup script (as root) on a cheap VPS you control. The script
+   installs WireGuard + a firewall, and forwards public ports 80/443 over the
+   tunnel to your Umbrel.
+3. Caddy on the Umbrel side terminates HTTPS and reverse-proxies each request to
+   the internal service you choose.
 
-### 2) Pedir challenge
+Your Umbrel never opens a port on your home router; all inbound traffic enters
+through the VPS and travels the encrypted tunnel.
 
-```bash
-KEY_ID="<keyId>"
+## Requirements
 
-CHALLENGE_JSON="$(curl -sS -X POST "$API_URL/api/auth/challenge" \
-  -H "Content-Type: application/json" \
-  -d "{\"keyId\":\"$KEY_ID\"}")"
+- An Umbrel running umbrelOS.
+- A small VPS (Debian/Ubuntu) with a public IP, and TCP **80/443** + UDP **51820**
+  open in your provider's firewall panel.
+- A domain (and the ability to point a DNS `A` record at the VPS IP).
 
-CHALLENGE_ID="$(printf '%s' "$CHALLENGE_JSON" | python3 - <<'PY'
-import json,sys
-data=json.loads(sys.stdin.read())
-print(data['challengeId'])
-PY
-)"
+## Quick start
 
-NONCE_B64="$(printf '%s' "$CHALLENGE_JSON" | python3 - <<'PY'
-import json,sys
-data=json.loads(sys.stdin.read())
-print(data['nonce'])
-PY
-)"
-```
+1. **Configuration** → *Generate keys*, then enter the VPS public IP and your
+   Let's Encrypt email.
+2. **VPS Setup** → copy/download the script and run it as root on the VPS.
+   Verify the printed SHA-256.
+3. Paste the VPS public key (printed by the script) back into **Configuration**
+   and save.
+4. **Services** → add a service (subdomain + internal URL) and save.
+5. Point your subdomain's DNS `A` record at the VPS IP.
 
-### 3) Firmar challenge y verificar
+Open `https://<your-subdomain>` — it should load your internal service over HTTPS.
 
-```bash
-SIG_B64="$(NONCE_B64="$NONCE_B64" node -e '
-const fs=require("fs");
-const crypto=require("crypto");
-const nonce=Buffer.from(process.env.NONCE_B64,"base64");
-const key=fs.readFileSync(process.env.PRIV_KEY_PATH||`${process.env.HOME}/.ssh/id_ed25519`,"utf8");
-const sig=crypto.sign(null, nonce, key);
-process.stdout.write(sig.toString("base64"));
-')"
+## Features
 
-VERIFY_JSON="$(curl -sS -X POST "$API_URL/api/auth/verify" \
-  -H "Content-Type: application/json" \
-  -d "{\"challengeId\":\"$CHALLENGE_ID\",\"signature\":\"$SIG_B64\"}")"
+- **Built-in login** (password + sessions) on top of Umbrel's app proxy.
+- **Multi-VPS & failover** — keep several VPS targets and fail over automatically
+  to the healthy one with the highest priority, or switch manually.
+- **Secure key rotation** — rotate WireGuard keys without breaking the tunnel.
+- **Emergency kill-switch** — one script to stop the tunnel and block the port.
+- **Encrypted backup / restore** of your configuration.
+- **CLI access** via ed25519 public-key challenge.
+- **Optional CrowdSec** hardening on the VPS.
 
-SESSION_TOKEN="$(printf '%s' "$VERIFY_JSON" | python3 - <<'PY'
-import json,sys
-print(json.loads(sys.stdin.read())['sessionToken'])
-PY
-)"
+## Security
 
-curl -sS "$API_URL/api/config" -H "Cookie: mw_session=$SESSION_TOKEN"
-```
+- WireGuard end-to-end encryption; the VPS only forwards encrypted traffic.
+- Secrets (WireGuard private/preshared keys) are encrypted at rest on the Umbrel
+  side; the audit log is a tamper-evident hash chain.
+- The generated VPS script hardens SSH (with lockout protection), sets up a
+  restrictive firewall with a rollback, and prints a SHA-256 you can verify
+  before running it.
+- Anti-brute-force throttling, anti-SSRF checks on health probes, and strict
+  input validation on the API.
 
-Nota: el backend espera firma Ed25519 "raw" en base64 sobre los bytes del `nonce` (después de decodificar base64).
+See [SECURITY.md](SECURITY.md) to report issues.
 
-## Rotación de claves (manual asistida)
+## CLI / advanced
 
-1. Preparar plan de rotación y script de rollback VPS:
+Authentication via ed25519 public key, assisted key rotation and the remote
+kill-switch can also be driven from the command line. See
+[`docs/cli.md`](docs/cli.md) for the full reference.
 
-```bash
-curl -sS -X POST "$API_URL/api/rotate/prepare" \
-  -H "Content-Type: application/json" \
-  -H "x-tunnel-api-token: $API_TOKEN"
-```
+## Repository layout
 
-2. Ejecutar en el VPS el script retornado por el endpoint.
-3. Confirmar desde API:
+- `web/` — Node/Express API + Preact UI (the app image).
+- `wg-client/` — WireGuard client container + minimal control API.
+- `vps-setup/` — helper scripts and runbooks for the VPS side.
+- `miniweed-tunnel/` packaging (`umbrel-app.yml`, `docker-compose.yml`) for the
+  Umbrel community app store.
 
-```bash
-curl -sS -X POST "$API_URL/api/rotate/confirm" \
-  -H "Content-Type: application/json" \
-  -H "x-tunnel-api-token: $API_TOKEN" \
-  -d '{"planId":"<planId>","apply":true}'
-```
-
-## Kill switch remoto (script)
-
-Descarga de script de emergencia:
+## Development
 
 ```bash
-curl -sS "$API_URL/api/kill-switch/script?format=plain" \
-  -H "x-tunnel-api-token: $API_TOKEN" \
-  -o miniweed-killswitch.sh
-chmod +x miniweed-killswitch.sh
+cd web
+npm test                 # backend tests
+npm --prefix ui run dev  # UI dev server (proxies /api to localhost:3016)
+DATA_DIR=/tmp/mw-dev PORT=3016 node server.js   # backend
 ```
 
-El script detiene `wg-quick@wg0` y bloquea UDP/51820.
+## License
 
-Opcionalmente puedes parametrizar el puerto o archivo de estado:
-
-```bash
-WG_PORT=51820 STATUS_FILE=/tmp/miniweed.status sudo bash miniweed-killswitch.sh
-```
-
-Instalación opcional como servicio systemd en el VPS (ejecución local, sin API del VPS):
-
-```bash
-sudo install -m 700 miniweed-killswitch.sh /mnt/killswitch.sh
-sudo bash miniweed-tunnel/vps-setup/killswitch-service.sh
-sudo systemctl start miniweed-killswitch.service
-```
-
-## Multi-VPS / failover
-
-El backend soporta varios VPS en paralelo con un VPS activo para WireGuard.
-
-- `vpsTargets[]`: lista de VPS candidatos (`id`, `name`, `ip`, `port`, `pubKey`, `enabled`, `priority`).
-- `activeVpsId`: VPS actualmente activo (endpoint WireGuard usado en `wg0.conf`).
-- Failover automatico: selecciona el VPS saludable con menor prioridad si el activo falla.
-- Failover manual: permite forzar cambio desde API/UI.
-
-### Obtener estado de targets
-
-```bash
-curl -sS "$API_URL/api/vps/targets" \
-  -H "x-tunnel-api-token: $API_TOKEN"
-```
-
-### Forzar failover manual
-
-```bash
-curl -sS -X POST "$API_URL/api/vps/failover" \
-  -H "Content-Type: application/json" \
-  -H "x-tunnel-api-token: $API_TOKEN" \
-  -d '{"targetId":"vps-b"}'
-```
-
-### Trigger de failover automatico
-
-```bash
-curl -sS -X POST "$API_URL/api/vps/failover" \
-  -H "Content-Type: application/json" \
-  -H "x-tunnel-api-token: $API_TOKEN" \
-  -d '{}'
-```
-
-### Script de setup por VPS + CrowdSec opcional
-
-```bash
-curl -sS "$API_URL/api/vps-setup-script?vpsId=vps-b&withCrowdsec=1" \
-  -H "x-tunnel-api-token: $API_TOKEN"
-```
-
-## CrowdSec (sin API del proveedor)
-
-El soporte CrowdSec se hace 100% por script local en el VPS, sin integrar APIs del proveedor cloud.
-
-- Activación: `withCrowdsec=1` al pedir `vps-setup-script`.
-- Verificación smoke local: `miniweed-tunnel/vps-setup/crowdsec-smoke.sh`.
-- Recuperación ante lockout/bloqueos: `miniweed-tunnel/vps-setup/crowdsec-recovery.md`.
-- El setup intenta validar post-instalación (`systemctl`, `cscli`, hook de `iptables`) y deja advertencias si algo no queda activo.
-
-Smoke check recomendado en VPS:
-
-```bash
-sudo bash miniweed-tunnel/vps-setup/crowdsec-smoke.sh
-```
+MIT. Developed with assistance from Claude (Anthropic).

@@ -23,7 +23,7 @@ sudo iptables -S INPUT | grep -- "--dport 51820"
 sudo systemctl disable crowdsec-firewall-bouncer
 sudo systemctl stop crowdsec-firewall-bouncer
 
-# opcional: limpiar cadenas CrowdSec en iptables para evitar bloqueos residuales
+# optional: clear CrowdSec iptables chains to avoid residual blocks
 sudo iptables-save | grep -qi crowdsec && sudo iptables-save > /root/iptables.before.crowdsec.cleanup.rules
 sudo iptables -S | grep -E "CROWDSEC|crowdsec" || true
 ```

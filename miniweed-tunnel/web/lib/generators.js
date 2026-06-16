@@ -40,7 +40,7 @@ function generateCaddyfile(cfg) {
 
 function generateVpsScript(cfg, target, options = {}) {
   const selected = target;
-  if (!selected) throw new Error('No hay VPS seleccionado');
+  if (!selected) throw new Error('No VPS selected');
   const clientIp = safeTunnelIp(cfg.tunnelClientIp, DEFAULT_CONFIG.tunnelClientIp);
   const serverIp = safeTunnelIp(cfg.tunnelServerIp, DEFAULT_CONFIG.tunnelServerIp);
   const withCrowdsec = Boolean(options.withCrowdsec);
@@ -68,26 +68,26 @@ for i in 1 2 3 4 5; do
   sleep 1
 done
 if ! systemctl is-active --quiet crowdsec; then
-  echo "Advertencia: crowdsec no quedo activo"
+  echo "Warning: crowdsec did not stay active"
 fi
 if ! systemctl is-active --quiet crowdsec-firewall-bouncer; then
-  echo "Advertencia: crowdsec-firewall-bouncer no quedo activo"
+  echo "Warning: crowdsec-firewall-bouncer did not stay active"
 fi
-cscli lapi status >/dev/null 2>&1 || echo "Advertencia: cscli no pudo validar LAPI"
-cscli bouncers list >/dev/null 2>&1 || echo "Advertencia: cscli no pudo listar bouncers"
-iptables-save | grep -qi crowdsec || echo "Advertencia: no se detecto hook iptables de CrowdSec"
+cscli lapi status >/dev/null 2>&1 || echo "Warning: cscli could not validate LAPI"
+cscli bouncers list >/dev/null 2>&1 || echo "Warning: cscli could not list bouncers"
+iptables-save | grep -qi crowdsec || echo "Warning: CrowdSec iptables hook not detected"
 `
     : '';
   return `#!/bin/bash
 # Umbrel Tunnel — VPS Setup
-# Ejecutar como root en un VPS Debian/Ubuntu
-# VPS dedicado exclusivamente a reverse proxy
+# Run as root on a Debian/Ubuntu VPS
+# VPS dedicated exclusively to reverse proxy
 
 set -euo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "Este script debe ejecutarse como root"
+  echo "This script must be run as root"
   exit 1
 fi
 
@@ -106,7 +106,7 @@ apt-get -o DPkg::Lock::Timeout=300 install -y -qq wireguard iptables iptables-pe
 
 PUBLIC_IF=$(ip route show default | awk '/default/{print $5; exit}')
 if [ -z "$PUBLIC_IF" ]; then
-  echo "No se pudo detectar la interfaz de red publica"
+  echo "Could not detect the public network interface"
   exit 1
 fi
 
@@ -117,7 +117,7 @@ fi
 [ -z "$SSH_PORT" ] && SSH_PORT=22
 
 if ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)\${SSH_PORT}$"; then
-  echo "No se detecta sshd escuchando en el puerto $SSH_PORT. Abortando para evitar lockout."
+  echo "sshd not detected listening on port $SSH_PORT. Aborting to avoid lockout."
   exit 1
 fi
 
@@ -133,7 +133,7 @@ cat > /root/miniweed-rollback-firewall.sh <<'ROLLBACKEOF'
 set -euo pipefail
 LATEST=$(ls -1t /root/miniweed-backups/iptables-before-*.rules 2>/dev/null | head -1)
 if [ -z "$LATEST" ]; then
-  echo "No hay backup de firewall para restaurar"
+  echo "No firewall backup to restore"
   exit 1
 fi
 iptables-restore < "$LATEST"
@@ -187,8 +187,8 @@ iptables -w -A FORWARD -p tcp -d "$WG_CLIENT_IP" --dport 80 -m conntrack --ctsta
 iptables -w -A FORWARD -p tcp -d "$WG_CLIENT_IP" --dport 443 -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
 iptables -w -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-# MSS clamping: imprescindible para que el handshake TLS (cadena de certificado,
-# varios KB) no se descarte en el túnel WireGuard tras un enlace con MTU < 1500.
+# MSS clamping: required so the TLS handshake (certificate chain,
+# several KB) is not dropped in the WireGuard tunnel behind a link with MTU < 1500.
 iptables -w -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1200
 
 iptables -w -P INPUT DROP
@@ -211,7 +211,7 @@ FAIL2BANEOF
 systemctl enable fail2ban >/dev/null 2>&1 || true
 systemctl restart fail2ban >/dev/null 2>&1 || true
 
-# Actualizaciones de seguridad automáticas
+# Automatic security updates
 systemctl enable unattended-upgrades >/dev/null 2>&1 || true
 systemctl restart unattended-upgrades >/dev/null 2>&1 || true
 ${crowdsecBlock}
@@ -233,10 +233,10 @@ SSHEOF
     SSH_HARDENED="yes"
   else
     rm -f /etc/ssh/sshd_config.d/99-miniweed-tunnel.conf
-    echo "Advertencia: configuracion SSH invalida, se omite endurecimiento SSH"
+    echo "Warning: invalid SSH configuration, skipping SSH hardening"
   fi
 else
-  echo "Advertencia: /root/.ssh/authorized_keys no existe o esta vacio; se mantiene acceso por password para evitar lockout"
+  echo "Warning: /root/.ssh/authorized_keys does not exist or is empty; keeping password access to avoid lockout"
 fi
 
 VPS_PRIV=$(wg genkey)
@@ -266,19 +266,19 @@ fi
 
 if ! systemctl is-active --quiet wg-quick@wg0; then
   /root/miniweed-rollback-firewall.sh || true
-  echo "WireGuard no arrancó correctamente. Firewall restaurado."
+  echo "WireGuard did not start correctly. Firewall restored."
   exit 1
 fi
 
 ACTIVE_PUB=$(wg show wg0 public-key 2>/dev/null || true)
 if [ -z "$ACTIVE_PUB" ]; then
   /root/miniweed-rollback-firewall.sh || true
-  echo "No se pudo leer la clave publica activa de wg0 tras aplicar la configuracion."
+  echo "Could not read the active wg0 public key after applying the configuration."
   exit 1
 fi
 if [ "$ACTIVE_PUB" != "$VPS_PUB" ]; then
   /root/miniweed-rollback-firewall.sh || true
-  echo "La clave activa de wg0 no coincide con la nueva clave generada."
+  echo "The active wg0 key does not match the newly generated key."
   echo "Esperada: $VPS_PUB"
   echo "Activa:   $ACTIVE_PUB"
   exit 1
@@ -291,16 +291,16 @@ echo ""
 echo "=============================================="
 echo " VPS Public Key: $VPS_PUB"
 echo "=============================================="
-echo " SSH PORT permitido: $SSH_PORT"
+echo " SSH PORT allowed: $SSH_PORT"
 if [ "$SSH_HARDENED" = "yes" ]; then
-  echo " SSH hardening: PasswordAuthentication no (solo clave publica)"
+  echo " SSH hardening: PasswordAuthentication no (public key only)"
 else
-  echo " SSH hardening: OMITIDO para evitar lockout"
+  echo " SSH hardening: SKIPPED to avoid lockout"
 fi
-echo " IMPORTANTE: en el panel cloud del proveedor abre TCP 80/443 y UDP $WG_PORT"
+echo " IMPORTANT: in your cloud provider panel open TCP 80/443 and UDP $WG_PORT"
 echo " Backup firewall: $BACKUP_FILE"
 echo " Rollback script: /root/miniweed-rollback-firewall.sh"
-echo " Pega esta clave en Umbrel Tunnel y listo."
+echo " Paste this key into Umbrel Tunnel and you are done."
 `;
 }
 
@@ -329,7 +329,7 @@ echo "[killswitch] completed"
 
 function buildVpsRotateScript(cfg, next, target) {
   const selected = target;
-  if (!selected) throw new Error('No hay VPS activo para rotación');
+  if (!selected) throw new Error('No active VPS for rotation');
   const clientIp = safeTunnelIp(cfg.tunnelClientIp, DEFAULT_CONFIG.tunnelClientIp);
   const serverIp = safeTunnelIp(cfg.tunnelServerIp, DEFAULT_CONFIG.tunnelServerIp);
   const pskLine = next.presharedKey ? `PresharedKey = ${next.presharedKey}` : '';
@@ -367,7 +367,7 @@ WGEOF
 if grep -q '^PrivateKey' /etc/wireguard/wg0.conf; then
   VPS_PRIV=$(awk -F' = ' '/^PrivateKey/ {print $2; exit}' /etc/wireguard/wg0.conf)
 else
-  echo "No se pudo leer PrivateKey actual de /etc/wireguard/wg0.conf"
+  echo "Could not read the current PrivateKey from /etc/wireguard/wg0.conf"
   exit 1
 fi
 

@@ -370,8 +370,8 @@ describe('api hardening', () => {
     expect(body.script).toContain('Instalando CrowdSec');
     expect(body.script).toContain('apt-get -o DPkg::Lock::Timeout=300 install -y -qq curl ca-certificates');
     expect(body.script).toContain('curl -fsSL https://install.crowdsec.net | sh');
-    expect(body.script).toContain('cscli lapi status >/dev/null 2>&1 || echo "Advertencia: cscli no pudo validar LAPI"');
-    expect(body.script).toContain('iptables-save | grep -qi crowdsec || echo "Advertencia: no se detecto hook iptables de CrowdSec"');
+    expect(body.script).toContain('cscli lapi status >/dev/null 2>&1 || echo "Warning: cscli could not validate LAPI"');
+    expect(body.script).toContain('iptables-save | grep -qi crowdsec || echo "Warning: CrowdSec iptables hook not detected"');
     expect(body.vps.id).toBe('vps-c');
   });
 
@@ -748,7 +748,7 @@ describe('api hardening', () => {
     expect(r.status).toBe(400);
     const body = JSON.parse(r.body);
     expect(Array.isArray(body.errors)).toBe(true);
-    expect(body.errors.join(' ')).toContain('destino reservado o de control');
+    expect(body.errors.join(' ')).toContain('reserved or control target');
   });
 
   test('rejects config service target to localhost caddy admin port', async () => {
@@ -769,7 +769,7 @@ describe('api hardening', () => {
     expect(r.status).toBe(400);
     const body = JSON.parse(r.body);
     expect(Array.isArray(body.errors)).toBe(true);
-    expect(body.errors.join(' ')).toContain('destino reservado o de control');
+    expect(body.errors.join(' ')).toContain('reserved or control target');
   });
 
   test('validation rejects malformed email', async () => {
@@ -1136,7 +1136,7 @@ describe('api hardening', () => {
     });
     expect(restoreBad.status).toBe(400);
     const body = JSON.parse(restoreBad.body);
-    expect(body.error).toContain('config en backup no pasa validación');
+    expect(body.error).toContain('config in backup failed validation');
     expect(Array.isArray(body.issues)).toBe(true);
   });
 
@@ -1155,7 +1155,7 @@ describe('api hardening', () => {
       'x-tunnel-api-token': token
     });
     expect(restoreBad.status).toBe(400);
-    expect(JSON.parse(restoreBad.body).error).toContain('no pasa validación');
+    expect(JSON.parse(restoreBad.body).error).toContain('failed validation');
   });
 
   test('VPS script generator sanitizes invalid tunnel IPs (M4 defense in depth)', () => {
@@ -1239,10 +1239,10 @@ describe('api hardening', () => {
     expect(health['bad|http://127.0.0.1:8080']).toEqual({
       ok: false,
       checked: false,
-      message: 'Destino no permitido'
+      message: 'Target not allowed'
     });
     expect(health['ok|http://10.0.0.5:8081'].ok).toBe(false);
-    expect(health['ok|http://10.0.0.5:8081'].message).toBe('Sin conexion');
+    expect(health['ok|http://10.0.0.5:8081'].message).toBe('No connection');
   });
 
   test('isDisallowedTargetIp blocks loopback/metadata but allows RFC1918 (A2)', () => {
@@ -1273,7 +1273,7 @@ describe('api hardening', () => {
     });
     const result = await mod._internals.probeServiceTarget('http://rebind.example.com/');
     expect(result.ok).toBe(false);
-    expect(result.error).toBe('Destino bloqueado');
+    expect(result.error).toBe('Target blocked');
   });
 
   // ── Caracterización de generadores (red de seguridad para el refactor) ──────

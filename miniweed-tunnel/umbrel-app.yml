@@ -1,26 +1,26 @@
 manifestVersion: 1
 id: miniweed-tunnel
 name: Tunnel
-tagline: Expón tu servidor al mundo sin tocar el router
+tagline: Expose your server to the world without touching your router
 category: networking
-version: "1.6.34"
+version: "1.6.35"
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.svg
 port: 3016
 description: >-
-  Conecta tu Umbrel a un VPS propio y expón servicios a internet sin abrir puertos
-  en tu router. Alternativa 100% self-hosted a Cloudflare Tunnel. Funciona detrás
-  de CGNAT. Usa WireGuard para cifrado extremo a extremo y Caddy para HTTPS
-  automático con Let's Encrypt.
+  Connect your Umbrel to your own VPS and expose services to the internet without
+  opening ports on your router. A 100% self-hosted alternative to Cloudflare Tunnel.
+  Works behind CGNAT. Uses WireGuard for end-to-end encryption and Caddy for
+  automatic HTTPS with Let's Encrypt.
 developer: miniweed
 website: https://github.com/miniweed/umbrel-app-store
 repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
 releaseNotes: >-
-  Arregla el acceso HTTPS a los servicios: el handshake TLS se cortaba por el
-  MTU del túnel (ahora con MSS clamping y MTU 1240 en WireGuard). Incluye los
-  arreglos previos (Caddy, icono) y: login propio, failover/multi-VPS, rotación
-  de claves, kill-switch, backup/restore y endurecimiento de seguridad.
+  Full English UI. Fixes HTTPS access to services (TLS handshake was dropped by the
+  tunnel MTU; now uses MSS clamping and MTU 1240 in WireGuard). Includes previous
+  fixes (Caddy startup, icon) and: built-in login, failover/multi-VPS, key rotation,
+  kill-switch, encrypted backup/restore and security hardening.
 dependencies: []
 path: ""
 defaultUsername: ""

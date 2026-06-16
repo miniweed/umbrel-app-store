@@ -25,11 +25,11 @@ import {
 } from './api.js';
 
 const TAB_ITEMS = [
-  { key: 'dashboard', label: 'Panel' },
-  { key: 'services', label: 'Servicios' },
-  { key: 'config', label: 'Configuracion' },
-  { key: 'vps', label: 'Setup VPS' },
-  { key: 'optional', label: 'Configuracion opcional' }
+  { key: 'dashboard', label: 'Dashboard' },
+  { key: 'services', label: 'Services' },
+  { key: 'config', label: 'Configuration' },
+  { key: 'vps', label: 'VPS Setup' },
+  { key: 'optional', label: 'Advanced' }
 ];
 
 const EMPTY_SERVICE = { name: '', subdomain: '', target: '', enabled: true };
@@ -41,9 +41,9 @@ function serviceKey(svc) {
 }
 
 function formatHealth(health) {
-  if (!health || !health.checked) return { cls: '', text: 'Sin comprobar' };
-  if (health.ok) return { cls: 'ok', text: 'Conectado' };
-  return { cls: 'error', text: 'Sin conexion' };
+  if (!health || !health.checked) return { cls: '', text: 'Not checked' };
+  if (health.ok) return { cls: 'ok', text: 'Connected' };
+  return { cls: 'error', text: 'No connection' };
 }
 
 function initialState() {
@@ -70,7 +70,7 @@ function normalizeConfig(cfg) {
 export function App() {
   const [tab, setTab] = useState('dashboard');
   const [cfg, setCfg] = useState(initialState());
-  const [status, setStatus] = useState({ connected: false, raw: 'Cargando...' });
+  const [status, setStatus] = useState({ connected: false, raw: 'Loading...' });
   const [message, setMessage] = useState({ text: '', kind: '' });
   const [loading, setLoading] = useState(false);
   const [vpsScriptWithCrowdsec, setVpsScriptWithCrowdsec] = useState(false);
@@ -81,13 +81,13 @@ export function App() {
   const [activeVpsId, setActiveVpsId] = useState('');
   const [vpsBusy, setVpsBusy] = useState('');
   const [healthBusy, setHealthBusy] = useState(false);
-  // Gating de sesión: 'loading' | 'login' | 'ready'
+  // Session gating: 'loading' | 'login' | 'ready'
   const [gate, setGate] = useState('loading');
   const [authStatus, setAuthStatus] = useState({ hasPassword: false, authenticated: false });
   const [loginPassword, setLoginPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [sessions, setSessions] = useState(null);
-  const [rotation, setRotation] = useState(null); // plan de rotación en curso
+  const [rotation, setRotation] = useState(null); // rotation plan in progress
   const [rotationBusy, setRotationBusy] = useState(false);
   const [killSwitch, setKillSwitch] = useState(null);
   const [killSwitchBusy, setKillSwitchBusy] = useState(false);
@@ -108,14 +108,14 @@ export function App() {
   const scriptMissingPublicKey = !cfg.publicKey;
   const scriptMissingVpsIp = !(cfg.vpsIp || '').trim();
   const scriptPrereqMissing = scriptMissingPublicKey || scriptMissingVpsIp;
-  const saveSuccessMsg = message.kind === 'success' && message.text.includes('Guardado.') ? message.text : '';
+  const saveSuccessMsg = message.kind === 'success' && message.text.includes('Saved.') ? message.text : '';
 
   async function refreshStatusOnly() {
     try {
       const data = await getStatus();
-      setStatus(data || { connected: false, raw: 'Sin informacion' });
+      setStatus(data || { connected: false, raw: 'No information' });
     } catch {
-      setStatus({ connected: false, raw: 'Error obteniendo estado' });
+      setStatus({ connected: false, raw: 'Error fetching status' });
     }
   }
 
@@ -130,7 +130,7 @@ export function App() {
       await Promise.all([refreshConfigOnly(), refreshStatusOnly()]);
       setMessage({ text: '', kind: '' });
     } catch (err) {
-      setMessage({ text: err.message || 'No se pudo cargar la configuracion.', kind: 'error' });
+      setMessage({ text: err.message || 'Could not load configuration.', kind: 'error' });
     } finally {
       setLoading(false);
     }
@@ -140,7 +140,7 @@ export function App() {
     try {
       const data = await getVpsSetupScript({ withCrowdsec: vpsScriptWithCrowdsec });
       setScriptMeta(data);
-      if (source === 'manual' && vpsScriptWithCrowdsec) setScriptReloadMsg('Script recargado con CrowdSec');
+      if (source === 'manual' && vpsScriptWithCrowdsec) setScriptReloadMsg('Script reloaded with CrowdSec');
       else setScriptReloadMsg('');
       setScriptCopied(false);
     } catch {
@@ -157,13 +157,13 @@ export function App() {
       setActiveVpsId(data?.activeVpsId || '');
     } catch (err) {
       setVpsTargets([]);
-      setMessage({ text: err.message || 'No se pudieron cargar los VPS.', kind: 'error' });
+      setMessage({ text: err.message || 'Could not load VPS targets.', kind: 'error' });
     }
   }
 
   async function onFailover(targetId) {
-    const label = targetId ? 'cambiar el VPS activo' : 'ejecutar failover automático';
-    if (!window.confirm(`¿Seguro que quieres ${label}? El túnel se reconfigurará.`)) return;
+    const label = targetId ? 'change the active VPS' : 'run automatic failover';
+    if (!window.confirm(`Are you sure you want to ${label}? The tunnel will be reconfigured.`)) return;
     setVpsBusy(targetId || 'auto');
     setMessage({ text: '', kind: '' });
     try {
@@ -172,12 +172,12 @@ export function App() {
       const to = res?.next?.name || res?.next?.id || res?.activeVpsId || '';
       setMessage({
         text: res?.switched === false
-          ? 'No fue necesario cambiar de VPS.'
-          : `VPS activo actualizado${to ? `: ${to}` : ''}.`,
+          ? 'No VPS switch was needed.'
+          : `Active VPS updated${to ? `: ${to}` : ''}.`,
         kind: 'success'
       });
     } catch (err) {
-      setMessage({ text: err.message || 'No se pudo cambiar de VPS.', kind: 'error' });
+      setMessage({ text: err.message || 'Could not switch VPS.', kind: 'error' });
     } finally {
       setVpsBusy('');
     }
@@ -189,9 +189,9 @@ export function App() {
     try {
       await refreshHealth();
       await refreshConfigOnly();
-      setMessage({ text: 'Estado de servicios actualizado.', kind: 'success' });
+      setMessage({ text: 'Service status updated.', kind: 'success' });
     } catch (err) {
-      setMessage({ text: err.message || 'No se pudo actualizar el estado.', kind: 'error' });
+      setMessage({ text: err.message || 'Could not refresh status.', kind: 'error' });
     } finally {
       setHealthBusy(false);
     }
@@ -201,7 +201,7 @@ export function App() {
     try {
       setAuthStatus(await getAuthStatus());
     } catch {
-      // status no disponible: seguimos, el gate lo decide la carga de config
+      // status unavailable: continue, the gate is decided by the config load
     }
     try {
       await Promise.all([refreshConfigOnly(), refreshStatusOnly()]);
@@ -210,9 +210,9 @@ export function App() {
       if (err.status === 401) {
         setGate('login');
       } else {
-        // Error no de auth (p.ej. backend caído): mostramos la app igual.
+        // Non-auth error (e.g. backend down): show the app anyway.
         setGate('ready');
-        setMessage({ text: err.message || 'No se pudo cargar la configuración.', kind: 'error' });
+        setMessage({ text: err.message || 'Could not load configuration.', kind: 'error' });
       }
     }
   }
@@ -228,7 +228,7 @@ export function App() {
       setAuthStatus(s => ({ ...s, authenticated: true }));
       await refreshAll();
     } catch (err) {
-      setMessage({ text: err.message || 'No se pudo iniciar sesión.', kind: 'error' });
+      setMessage({ text: err.message || 'Could not sign in.', kind: 'error' });
     } finally {
       setLoading(false);
     }
@@ -237,11 +237,11 @@ export function App() {
   async function onSetInitialPassword(e) {
     if (e && e.preventDefault) e.preventDefault();
     if (loginPassword.length < 8) {
-      setMessage({ text: 'La contraseña debe tener al menos 8 caracteres.', kind: 'error' });
+      setMessage({ text: 'The password must be at least 8 characters.', kind: 'error' });
       return;
     }
     if (loginPassword !== confirmPassword) {
-      setMessage({ text: 'Las contraseñas no coinciden.', kind: 'error' });
+      setMessage({ text: 'Passwords do not match.', kind: 'error' });
       return;
     }
     setLoading(true);
@@ -255,18 +255,18 @@ export function App() {
       setAuthStatus({ hasPassword: true, authenticated: true });
       await refreshAll();
     } catch (err) {
-      setMessage({ text: err.message || 'No se pudo crear la contraseña.', kind: 'error' });
+      setMessage({ text: err.message || 'Could not create the password.', kind: 'error' });
     } finally {
       setLoading(false);
     }
   }
 
   async function onLogout() {
-    if (!window.confirm('¿Cerrar sesión?')) return;
+    if (!window.confirm('Sign out?')) return;
     try {
       await logout();
     } catch {
-      // ignoramos: igualmente volvemos al login
+      // ignore: we go back to login regardless
     }
     setAuthStatus(s => ({ ...s, authenticated: false }));
     setGate('login');
@@ -278,12 +278,12 @@ export function App() {
       setSessions(Array.isArray(data?.sessions) ? data.sessions : []);
     } catch (err) {
       setSessions([]);
-      setMessage({ text: err.message || 'No se pudieron cargar las sesiones.', kind: 'error' });
+      setMessage({ text: err.message || 'Could not load sessions.', kind: 'error' });
     }
   }
 
   async function onRevokeSession(id, isCurrent) {
-    if (!window.confirm(isCurrent ? 'Esta es tu sesión actual. ¿Cerrarla?' : '¿Revocar esta sesión?')) return;
+    if (!window.confirm(isCurrent ? 'This is your current session. Close it?' : 'Revoke this session?')) return;
     try {
       await revokeSession(id);
       if (isCurrent) {
@@ -292,9 +292,9 @@ export function App() {
         return;
       }
       await loadSessions();
-      setMessage({ text: 'Sesión revocada.', kind: 'success' });
+      setMessage({ text: 'Session revoked.', kind: 'success' });
     } catch (err) {
-      setMessage({ text: err.message || 'No se pudo revocar la sesión.', kind: 'error' });
+      setMessage({ text: err.message || 'Could not revoke the session.', kind: 'error' });
     }
   }
 
@@ -310,17 +310,17 @@ export function App() {
 
   async function onRotatePrepare() {
     if (!window.confirm(
-      'Se generarán claves nuevas y un script para el VPS. El túnel NO cambia hasta que ' +
-      'ejecutes el script en el VPS y confirmes aquí. ¿Continuar?'
+      'New keys and a VPS script will be generated. The tunnel does NOT change until ' +
+      'you run the script on the VPS and confirm here. Continue?'
     )) return;
     setRotationBusy(true);
     setMessage({ text: '', kind: '' });
     try {
       const plan = await rotatePrepare();
       setRotation(plan);
-      setMessage({ text: 'Plan de rotación creado. Ejecuta el script en el VPS y confirma.', kind: 'success' });
+      setMessage({ text: 'Rotation plan created. Run the script on the VPS and confirm.', kind: 'success' });
     } catch (err) {
-      setMessage({ text: err.message || 'No se pudo preparar la rotación.', kind: 'error' });
+      setMessage({ text: err.message || 'Could not prepare the rotation.', kind: 'error' });
     } finally {
       setRotationBusy(false);
     }
@@ -328,16 +328,16 @@ export function App() {
 
   async function onRotateConfirm(apply) {
     if (!rotation?.planId) return;
-    if (apply && !window.confirm('¿Aplicar las claves nuevas? Solo confirma si ya ejecutaste el script en el VPS.')) return;
+    if (apply && !window.confirm('Apply the new keys? Only confirm if you already ran the script on the VPS.')) return;
     setRotationBusy(true);
     setMessage({ text: '', kind: '' });
     try {
       await rotateConfirm(rotation.planId, apply);
       setRotation(null);
       if (apply) await refreshConfigOnly();
-      setMessage({ text: apply ? 'Claves rotadas correctamente.' : 'Rotación cancelada.', kind: 'success' });
+      setMessage({ text: apply ? 'Keys rotated successfully.' : 'Rotation cancelled.', kind: 'success' });
     } catch (err) {
-      setMessage({ text: err.message || 'No se pudo completar la rotación.', kind: 'error' });
+      setMessage({ text: err.message || 'Could not complete the rotation.', kind: 'error' });
     } finally {
       setRotationBusy(false);
     }
@@ -349,7 +349,7 @@ export function App() {
     try {
       setKillSwitch(await getKillSwitchScript());
     } catch (err) {
-      setMessage({ text: err.message || 'No se pudo generar el kill-switch.', kind: 'error' });
+      setMessage({ text: err.message || 'Could not generate the kill-switch.', kind: 'error' });
     } finally {
       setKillSwitchBusy(false);
     }
@@ -373,7 +373,7 @@ export function App() {
       setPubkeys(Array.isArray(data?.pubkeys) ? data.pubkeys : []);
     } catch (err) {
       setPubkeys([]);
-      setMessage({ text: err.message || 'No se pudieron cargar las claves.', kind: 'error' });
+      setMessage({ text: err.message || 'Could not load keys.', kind: 'error' });
     }
   }
 
@@ -387,42 +387,42 @@ export function App() {
       setNewPubkeyName('');
       setNewPubkeyValue('');
       await loadPubkeys();
-      setMessage({ text: 'Clave añadida.', kind: 'success' });
+      setMessage({ text: 'Key added.', kind: 'success' });
     } catch (err) {
-      setMessage({ text: err.message || 'No se pudo añadir la clave.', kind: 'error' });
+      setMessage({ text: err.message || 'Could not add the key.', kind: 'error' });
     } finally {
       setPubkeyBusy(false);
     }
   }
 
   async function onRemovePubkey(id, name) {
-    if (!window.confirm(`¿Revocar la clave "${name || id}"?`)) return;
+    if (!window.confirm(`Revoke the key "${name || id}"?`)) return;
     try {
       await removePubkey(id);
       await loadPubkeys();
-      setMessage({ text: 'Clave revocada.', kind: 'success' });
+      setMessage({ text: 'Key revoked.', kind: 'success' });
     } catch (err) {
-      setMessage({ text: err.message || 'No se pudo revocar la clave.', kind: 'error' });
+      setMessage({ text: err.message || 'Could not revoke the key.', kind: 'error' });
     }
   }
 
   async function onChangePassword(e) {
     if (e && e.preventDefault) e.preventDefault();
     if (pwdNew.length < 8) {
-      setMessage({ text: 'La nueva contraseña debe tener al menos 8 caracteres.', kind: 'error' });
+      setMessage({ text: 'The new password must be at least 8 characters.', kind: 'error' });
       return;
     }
     setPwdBusy(true);
     setMessage({ text: '', kind: '' });
     try {
-      // Con sesión activa basta; enviamos currentPassword por si acaso.
+      // An active session is enough; we send currentPassword just in case.
       await setPassword(pwdNew, pwdCurrent || undefined);
       setPwdCurrent('');
       setPwdNew('');
-      setMessage({ text: 'Contraseña actualizada. Se cerraron las demás sesiones.', kind: 'success' });
+      setMessage({ text: 'Password updated. All other sessions were signed out.', kind: 'success' });
       await loadSessions();
     } catch (err) {
-      setMessage({ text: err.message || 'No se pudo cambiar la contraseña.', kind: 'error' });
+      setMessage({ text: err.message || 'Could not change the password.', kind: 'error' });
     } finally {
       setPwdBusy(false);
     }
@@ -431,7 +431,7 @@ export function App() {
   async function onCreateBackup(e) {
     if (e && e.preventDefault) e.preventDefault();
     if (backupPass.length < 12) {
-      setMessage({ text: 'La passphrase del backup debe tener al menos 12 caracteres.', kind: 'error' });
+      setMessage({ text: 'The backup passphrase must be at least 12 characters.', kind: 'error' });
       return;
     }
     setBackupBusy(true);
@@ -447,9 +447,9 @@ export function App() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       setBackupPass('');
-      setMessage({ text: 'Backup descargado.', kind: 'success' });
+      setMessage({ text: 'Backup downloaded.', kind: 'success' });
     } catch (err) {
-      setMessage({ text: err.message || 'No se pudo crear el backup.', kind: 'error' });
+      setMessage({ text: err.message || 'Could not create the backup.', kind: 'error' });
     } finally {
       setBackupBusy(false);
     }
@@ -458,14 +458,14 @@ export function App() {
   async function onRestoreBackup(e) {
     if (e && e.preventDefault) e.preventDefault();
     if (!restoreFile) {
-      setMessage({ text: 'Selecciona un archivo de backup.', kind: 'error' });
+      setMessage({ text: 'Select a backup file.', kind: 'error' });
       return;
     }
     if (restorePass.length < 12) {
-      setMessage({ text: 'Introduce la passphrase del backup (mín. 12).', kind: 'error' });
+      setMessage({ text: 'Enter the backup passphrase (min. 12).', kind: 'error' });
       return;
     }
-    if (!window.confirm('Restaurar sobrescribirá la configuración actual. ¿Continuar?')) return;
+    if (!window.confirm('Restoring will overwrite the current configuration. Continue?')) return;
     setRestoreBusy(true);
     setMessage({ text: '', kind: '' });
     try {
@@ -474,9 +474,9 @@ export function App() {
       setRestorePass('');
       setRestoreFile(null);
       await refreshAll();
-      setMessage({ text: 'Backup restaurado correctamente.', kind: 'success' });
+      setMessage({ text: 'Backup restored successfully.', kind: 'success' });
     } catch (err) {
-      setMessage({ text: err.message || 'No se pudo restaurar el backup.', kind: 'error' });
+      setMessage({ text: err.message || 'Could not restore the backup.', kind: 'error' });
     } finally {
       setRestoreBusy(false);
     }
@@ -493,9 +493,9 @@ export function App() {
   }, [tab, vpsScriptWithCrowdsec, gate]);
 
   const statusBadge = useMemo(() => {
-    if (status.connected) return { cls: 'connected', text: 'Conectado' };
-    if ((status.peerCount || 0) > 0) return { cls: 'waiting', text: 'Conectando...' };
-    return { cls: 'disconnected', text: 'Sin tunel' };
+    if (status.connected) return { cls: 'connected', text: 'Connected' };
+    if ((status.peerCount || 0) > 0) return { cls: 'waiting', text: 'Connecting...' };
+    return { cls: 'disconnected', text: 'No tunnel' };
   }, [status]);
 
   function setField(field, value) {
@@ -517,8 +517,8 @@ export function App() {
 
   function removeServiceRow(index) {
     const svc = (cfg.services || [])[index];
-    const name = svc?.name || svc?.subdomain || svc?.target || 'este servicio';
-    if (!window.confirm(`¿Eliminar ${name}? Guarda para aplicar el cambio.`)) return;
+    const name = svc?.name || svc?.subdomain || svc?.target || 'this service';
+    if (!window.confirm(`Delete ${name}? Save to apply the change.`)) return;
     setCfg(current => ({
       ...current,
       services: current.services.filter((_, i) => i !== index)
@@ -551,7 +551,7 @@ export function App() {
       await saveConfig(buildConfigPayload());
       await refreshConfigOnly();
       if (tab === 'vps') await loadVpsScript();
-      setMessage({ text: 'Guardado. El tunel se reconfigura automaticamente.', kind: 'success' });
+      setMessage({ text: 'Saved. The tunnel reconfigures automatically.', kind: 'success' });
     } catch (err) {
       if (Array.isArray(err.payload?.errors) && err.payload.errors.length) {
         setMessage({ text: `Error: ${err.payload.errors.join(' | ')}`, kind: 'error' });
@@ -564,7 +564,7 @@ export function App() {
           .join(' | ');
         setMessage({ text: `Validation: ${detail}`, kind: 'error' });
       } else {
-        setMessage({ text: err.message || 'Error al guardar.', kind: 'error' });
+        setMessage({ text: err.message || 'Save failed.', kind: 'error' });
       }
     } finally {
       setLoading(false);
@@ -573,16 +573,16 @@ export function App() {
 
   async function onGenerateKeys() {
     if (cfg.publicKey && !window.confirm(
-      'Regenerar las claves invalidará la conexión actual con el VPS. ' +
-      'Tendrás que volver a ejecutar el script en el VPS. ¿Continuar?'
+      'Regenerating keys will invalidate the current connection with the VPS. ' +
+      'You will need to run the script on the VPS again. Continue?'
     )) return;
     setLoading(true);
     try {
       const data = await keygen();
       setCfg(current => ({ ...current, publicKey: data.publicKey || current.publicKey }));
-      setMessage({ text: 'Claves generadas correctamente.', kind: 'success' });
+      setMessage({ text: 'Keys generated successfully.', kind: 'success' });
     } catch (err) {
-      setMessage({ text: err.message || 'No se pudieron generar las claves.', kind: 'error' });
+      setMessage({ text: err.message || 'Could not generate keys.', kind: 'error' });
     } finally {
       setLoading(false);
     }
@@ -606,11 +606,11 @@ export function App() {
         document.body.removeChild(area);
         if (!ok) throw new Error('copy failed');
       }
-      setMessage({ text: 'Script copiado al portapapeles.', kind: 'success' });
+      setMessage({ text: 'Script copied to clipboard.', kind: 'success' });
       setScriptCopied(true);
       window.setTimeout(() => setScriptCopied(false), 2200);
     } catch {
-      setMessage({ text: 'No se pudo copiar automaticamente.', kind: 'error' });
+      setMessage({ text: 'Could not copy automatically.', kind: 'error' });
       setScriptCopied(false);
     }
   }
@@ -636,15 +636,15 @@ export function App() {
     return (
       <>
         {setupIncomplete ? (
-          <div className="alert alert-info">Primera configuracion necesaria. Ve a Configuracion para empezar.</div>
+          <div className="alert alert-info">Initial setup required. Go to Configuration to get started.</div>
         ) : null}
         <section className="panel">
-          <h2>Estado del tunel</h2>
-          <pre className="code-box">{status.raw || 'Sin informacion'}</pre>
+          <h2>Tunnel status</h2>
+          <pre className="code-box">{status.raw || 'No information'}</pre>
         </section>
         {showServices ? (
           <section className="panel">
-            <h2>Servicios expuestos</h2>
+            <h2>Exposed services</h2>
             <div className="service-links">
               {enabled.map(svc => {
                 const host = svc.subdomain ? `${svc.subdomain}.${cfg.domain}` : cfg.domain;
@@ -656,7 +656,7 @@ export function App() {
                     <span className="muted">{svc.name || svc.target}</span>
                     <div className="service-link-meta">
                       <a href={`https://${host}`} target="_blank" rel="noopener noreferrer">{`https://${host}`}</a>
-                      {duplicated ? <span className="duplicate-badge">host duplicado</span> : null}
+                      {duplicated ? <span className="duplicate-badge">duplicate host</span> : null}
                     </div>
                   </div>
                 );
@@ -672,47 +672,47 @@ export function App() {
     return (
       <>
         <section className="panel">
-          <h2>Claves WireGuard</h2>
+          <h2>WireGuard keys</h2>
           <label className={scriptMissingPublicKey ? 'label-required-missing' : 'label-required-ok'}>
-            Clave publica de Umbrel (requerido para script)
+            Umbrel public key (required for script)
           </label>
           <input className={scriptMissingPublicKey ? 'input-required-missing' : ''} value={cfg.publicKey || ''} readOnly />
           <div className="actions-row">
             <button className="btn btn-primary" onClick={onGenerateKeys} disabled={loading}>
-              {cfg.publicKey ? 'Regenerar claves' : 'Generar claves'}
+              {cfg.publicKey ? 'Regenerate keys' : 'Generate keys'}
             </button>
           </div>
           {cfg.publicKey ? (
             <div className="rotate-box">
-              <h3>Rotación segura de claves</h3>
+              <h3>Secure key rotation</h3>
               <p className="muted">
-                A diferencia de «Regenerar», la rotación no corta el túnel: genera claves
-                nuevas y un script para el VPS, y solo las aplica cuando confirmas.
+                Unlike "Regenerate", rotation does not break the tunnel: it generates new keys
+                and a VPS script, and only applies them once you confirm.
               </p>
               {!rotation ? (
                 <div className="actions-row">
                   <button className="btn" onClick={onRotatePrepare} disabled={rotationBusy}>
-                    {rotationBusy ? 'Preparando…' : 'Iniciar rotación'}
+                    {rotationBusy ? 'Preparing…' : 'Start rotation'}
                   </button>
                 </div>
               ) : (
                 <>
                   <p className="muted">
-                    Nueva huella: <code>{rotation.nextPublicKeyFingerprint || '—'}</code>
+                    New fingerprint: <code>{rotation.nextPublicKeyFingerprint || '—'}</code>
                     {rotation.target?.ip ? ` · VPS ${rotation.target.name || rotation.target.id} (${rotation.target.ip})` : ''}
                   </p>
                   <ol className="steps">
-                    <li>Ejecuta este script como root en el VPS.</li>
-                    <li>Cuando termine, pulsa «Confirmar y aplicar».</li>
+                    <li>Run this script as root on the VPS.</li>
+                    <li>When it finishes, click "Confirm and apply".</li>
                   </ol>
                   <pre className="code-box">{rotation.script}</pre>
                   <p className="muted">SHA-256: <code>{rotation.scriptSha256 || '-'}</code></p>
                   <div className="actions-row">
-                    <button className="btn" onClick={() => downloadText('miniweed-rotate.sh', rotation.script)}>Descargar .sh</button>
+                    <button className="btn" onClick={() => downloadText('miniweed-rotate.sh', rotation.script)}>Download .sh</button>
                     <button className="btn btn-primary" onClick={() => onRotateConfirm(true)} disabled={rotationBusy}>
-                      {rotationBusy ? 'Aplicando…' : 'Confirmar y aplicar'}
+                      {rotationBusy ? 'Applying…' : 'Confirm and apply'}
                     </button>
-                    <button className="btn btn-danger" onClick={() => onRotateConfirm(false)} disabled={rotationBusy}>Cancelar</button>
+                    <button className="btn btn-danger" onClick={() => onRotateConfirm(false)} disabled={rotationBusy}>Cancel</button>
                   </div>
                 </>
               )}
@@ -721,14 +721,14 @@ export function App() {
         </section>
 
         <section className="panel">
-          <h2>Servidor VPS</h2>
+          <h2>VPS server</h2>
           {scriptPrereqMissing ? (
             <div className="alert alert-warn">
-              Para generar el script, completa los campos marcados en rojo.
+              To generate the script, complete the fields marked in red.
             </div>
           ) : null}
           <label className={scriptMissingVpsIp ? 'label-required-missing' : 'label-required-ok'}>
-            IP publica del VPS (requerido para script)
+            VPS public IP (required for script)
           </label>
           <input
             className={scriptMissingVpsIp ? 'input-required-missing' : ''}
@@ -736,23 +736,23 @@ export function App() {
             onInput={e => setField('vpsIp', e.currentTarget.value)}
             placeholder="123.45.67.89"
           />
-          <label>Puerto WireGuard del VPS</label>
+          <label>VPS WireGuard port</label>
           <input type="number" value={cfg.vpsPort || 51820} onInput={e => setField('vpsPort', e.currentTarget.value)} min="1" max="65535" />
-          <label>Clave publica del VPS</label>
-          <input value={cfg.vpsPubKey || ''} onInput={e => setField('vpsPubKey', e.currentTarget.value)} placeholder="Pega aqui la clave publica del VPS" />
-          <p className="muted">{cfg.vpsPubKey ? `Clave VPS sincronizada (${cfg.vpsPubKeyFingerprint || 'sin huella'})` : 'Sin sincronizar'}</p>
+          <label>VPS public key</label>
+          <input value={cfg.vpsPubKey || ''} onInput={e => setField('vpsPubKey', e.currentTarget.value)} placeholder="Paste the VPS public key here" />
+          <p className="muted">{cfg.vpsPubKey ? `VPS key synced (${cfg.vpsPubKeyFingerprint || 'no fingerprint'})` : 'Not synced'}</p>
         </section>
 
         <section className="panel">
-          <h2>Dominio y HTTPS</h2>
-          <label>Dominio principal</label>
-          <input value={cfg.domain || ''} onInput={e => setField('domain', e.currentTarget.value)} placeholder="home.tudominio.com" />
-          <label>Email para Let's Encrypt</label>
-          <input type="email" value={cfg.acmeEmail || ''} onInput={e => setField('acmeEmail', e.currentTarget.value)} placeholder="tu@email.com" />
+          <h2>Domain & HTTPS</h2>
+          <label>Main domain</label>
+          <input value={cfg.domain || ''} onInput={e => setField('domain', e.currentTarget.value)} placeholder="home.yourdomain.com" />
+          <label>Let's Encrypt email</label>
+          <input type="email" value={cfg.acmeEmail || ''} onInput={e => setField('acmeEmail', e.currentTarget.value)} placeholder="you@email.com" />
         </section>
 
         <div className="actions-row">
-          <button className="btn btn-primary" onClick={onSaveConfig} disabled={loading}>Guardar configuracion</button>
+          <button className="btn btn-primary" onClick={onSaveConfig} disabled={loading}>Save configuration</button>
           {saveSuccessMsg ? <span className="save-inline-msg">{saveSuccessMsg}</span> : null}
         </div>
       </>
@@ -760,36 +760,36 @@ export function App() {
   }
 
   function renderVpsHealth(health) {
-    if (!health) return <span className="health-pill">Sin datos</span>;
-    if (health.ok) return <span className="health-pill ok">Saludable</span>;
-    return <span className="health-pill error">{health.message || 'Sin conexión'}</span>;
+    if (!health) return <span className="health-pill">No data</span>;
+    if (health.ok) return <span className="health-pill ok">Healthy</span>;
+    return <span className="health-pill error">{health.message || 'No connection'}</span>;
   }
 
   function renderOptionalConfig() {
     return (
       <>
         <section className="panel">
-          <h2>Failover y VPS múltiples</h2>
+          <h2>Failover & multiple VPS</h2>
           <p className="muted">
-            Estado de los VPS candidatos. Puedes forzar el VPS activo o lanzar un
-            failover automático al candidato saludable de mayor prioridad.
+            Status of candidate VPS targets. You can force the active VPS or trigger automatic
+            failover to the healthy candidate with the highest priority.
           </p>
           <div className="actions-row">
-            <button className="btn" onClick={loadVpsTargets} disabled={Boolean(vpsBusy)}>Actualizar estado</button>
+            <button className="btn" onClick={loadVpsTargets} disabled={Boolean(vpsBusy)}>Refresh status</button>
             <button
               className="btn btn-primary"
               onClick={() => onFailover('')}
               disabled={Boolean(vpsBusy)}
             >
-              {vpsBusy === 'auto' ? 'Evaluando…' : 'Failover automático'}
+              {vpsBusy === 'auto' ? 'Evaluating…' : 'Automatic failover'}
             </button>
           </div>
 
           {vpsTargets === null ? (
-            <p className="muted">Cargando VPS…</p>
+            <p className="muted">Loading VPS…</p>
           ) : vpsTargets.length === 0 ? (
             <div className="alert alert-info">
-              No hay VPS configurados. Añade la IP y la clave del VPS en Configuración.
+              No VPS configured. Add the VPS IP and key in Configuration.
             </div>
           ) : (
             <div className="vps-list">
@@ -799,18 +799,18 @@ export function App() {
                   <div key={t.id} className={`vps-row ${isActive ? 'active' : ''}`}>
                     <div className="vps-row-main">
                       <strong>{t.name || t.id}</strong>
-                      {isActive ? <span className="duplicate-badge">activo</span> : null}
-                      <span className="muted">{t.ip || 'sin IP'}:{t.port || 51820}</span>
+                      {isActive ? <span className="duplicate-badge">active</span> : null}
+                      <span className="muted">{t.ip || 'no IP'}:{t.port || 51820}</span>
                     </div>
                     <div className="vps-row-meta">
                       {renderVpsHealth(t.health)}
-                      <span className="muted">prioridad {typeof t.priority === 'number' ? t.priority : '—'}</span>
+                      <span className="muted">priority {typeof t.priority === 'number' ? t.priority : '—'}</span>
                       <button
                         className="btn"
                         disabled={isActive || Boolean(vpsBusy) || !t.enabled || !t.ip || !t.pubKey}
                         onClick={() => onFailover(t.id)}
                       >
-                        {vpsBusy === t.id ? 'Cambiando…' : 'Activar'}
+                        {vpsBusy === t.id ? 'Switching…' : 'Activate'}
                       </button>
                     </div>
                   </div>
@@ -821,18 +821,18 @@ export function App() {
         </section>
 
         <section className="panel">
-          <h2>Kill-switch de emergencia</h2>
+          <h2>Emergency kill-switch</h2>
           <p className="muted">
-            Script para detener WireGuard y bloquear el puerto UDP en el VPS si necesitas
-            cortar el túnel de inmediato. Ejecútalo como root en el VPS.
+            Script to stop WireGuard and block the UDP port on the VPS if you need to cut the
+            tunnel immediately. Run it as root on the VPS.
           </p>
           <div className="actions-row">
             <button className="btn" onClick={onLoadKillSwitch} disabled={killSwitchBusy}>
-              {killSwitchBusy ? 'Generando…' : 'Generar kill-switch'}
+              {killSwitchBusy ? 'Generating…' : 'Generate kill-switch'}
             </button>
             {killSwitch ? (
               <button className="btn" onClick={() => downloadText(killSwitch.filename || 'miniweed-killswitch.sh', killSwitch.script)}>
-                Descargar .sh
+                Download .sh
               </button>
             ) : null}
           </div>
@@ -845,28 +845,28 @@ export function App() {
         </section>
 
         <section className="panel">
-          <h2>Sesiones activas</h2>
-          <p className="muted">Dispositivos con sesión iniciada. Puedes revocar cualquiera.</p>
+          <h2>Active sessions</h2>
+          <p className="muted">Devices with an active session. You can revoke any of them.</p>
           <div className="actions-row">
-            <button className="btn" onClick={loadSessions}>Actualizar</button>
+            <button className="btn" onClick={loadSessions}>Refresh</button>
           </div>
           {sessions === null ? (
-            <p className="muted">Cargando sesiones…</p>
+            <p className="muted">Loading sessions…</p>
           ) : sessions.length === 0 ? (
-            <p className="muted">Sin sesiones activas (o la autenticación está deshabilitada).</p>
+            <p className="muted">No active sessions (or authentication is disabled).</p>
           ) : (
             <div className="vps-list">
               {sessions.map(s => (
                 <div key={s.id} className={`vps-row ${s.current ? 'active' : ''}`}>
                   <div className="vps-row-main">
-                    <strong>{s.source || 'sesión'}</strong>
-                    {s.current ? <span className="duplicate-badge">esta sesión</span> : null}
-                    <span className="muted">{s.ip || 'ip desconocida'}</span>
+                    <strong>{s.source || 'session'}</strong>
+                    {s.current ? <span className="duplicate-badge">this session</span> : null}
+                    <span className="muted">{s.ip || 'unknown ip'}</span>
                   </div>
                   <div className="vps-row-meta">
-                    <span className="muted">expira {new Date(s.expiresAt).toLocaleString()}</span>
+                    <span className="muted">expires {new Date(s.expiresAt).toLocaleString()}</span>
                     <button className="btn btn-danger" onClick={() => onRevokeSession(s.id, s.current)}>
-                      {s.current ? 'Cerrar sesión' : 'Revocar'}
+                      {s.current ? 'Sign out' : 'Revoke'}
                     </button>
                   </div>
                 </div>
@@ -876,39 +876,39 @@ export function App() {
         </section>
 
         <section className="panel">
-          <h2>Cambiar contraseña</h2>
+          <h2>Change password</h2>
           <form onSubmit={onChangePassword}>
-            <label htmlFor="pwd-current">Contraseña actual (opcional si hay sesión)</label>
+            <label htmlFor="pwd-current">Current password (optional if signed in)</label>
             <input id="pwd-current" type="password" autoComplete="current-password" value={pwdCurrent} onInput={e => setPwdCurrent(e.currentTarget.value)} />
-            <label htmlFor="pwd-new">Nueva contraseña</label>
+            <label htmlFor="pwd-new">New password</label>
             <input id="pwd-new" type="password" autoComplete="new-password" value={pwdNew} onInput={e => setPwdNew(e.currentTarget.value)} />
-            <p className="muted">Mínimo 8 caracteres. Al cambiarla se cerrarán las demás sesiones.</p>
+            <p className="muted">Minimum 8 characters. Changing it signs out all other sessions.</p>
             <div className="actions-row">
               <button className="btn btn-primary" type="submit" disabled={pwdBusy || !pwdNew}>
-                {pwdBusy ? 'Guardando…' : 'Cambiar contraseña'}
+                {pwdBusy ? 'Saving…' : 'Change password'}
               </button>
             </div>
           </form>
         </section>
 
         <section className="panel">
-          <h2>Claves de acceso CLI</h2>
-          <p className="muted">Claves públicas (ed25519) autorizadas para autenticación por línea de comandos.</p>
+          <h2>CLI access keys</h2>
+          <p className="muted">Public keys (ed25519) authorized for command-line authentication.</p>
           <form onSubmit={onAddPubkey}>
-            <label htmlFor="pk-name">Nombre</label>
+            <label htmlFor="pk-name">Name</label>
             <input id="pk-name" value={newPubkeyName} onInput={e => setNewPubkeyName(e.currentTarget.value)} placeholder="laptop-cli" />
-            <label htmlFor="pk-value">Clave pública</label>
-            <input id="pk-value" value={newPubkeyValue} onInput={e => setNewPubkeyValue(e.currentTarget.value)} placeholder="ssh-ed25519 AAAA… o DER base64" />
+            <label htmlFor="pk-value">Public key</label>
+            <input id="pk-value" value={newPubkeyValue} onInput={e => setNewPubkeyValue(e.currentTarget.value)} placeholder="ssh-ed25519 AAAA… or DER base64" />
             <div className="actions-row">
               <button className="btn" type="submit" disabled={pubkeyBusy || !newPubkeyName || !newPubkeyValue}>
-                {pubkeyBusy ? 'Añadiendo…' : 'Añadir clave'}
+                {pubkeyBusy ? 'Adding…' : 'Add key'}
               </button>
             </div>
           </form>
           {pubkeys === null ? (
-            <p className="muted">Cargando claves…</p>
+            <p className="muted">Loading keys…</p>
           ) : pubkeys.length === 0 ? (
-            <p className="muted">Sin claves CLI registradas.</p>
+            <p className="muted">No CLI keys registered.</p>
           ) : (
             <div className="vps-list">
               {pubkeys.map(k => (
@@ -918,8 +918,8 @@ export function App() {
                     <span className="muted">id {k.id}</span>
                   </div>
                   <div className="vps-row-meta">
-                    {k.addedAt ? <span className="muted">añadida {new Date(k.addedAt).toLocaleDateString()}</span> : null}
-                    <button className="btn btn-danger" onClick={() => onRemovePubkey(k.id, k.name)}>Revocar</button>
+                    {k.addedAt ? <span className="muted">added {new Date(k.addedAt).toLocaleDateString()}</span> : null}
+                    <button className="btn btn-danger" onClick={() => onRemovePubkey(k.id, k.name)}>Revoke</button>
                   </div>
                 </div>
               ))}
@@ -928,26 +928,26 @@ export function App() {
         </section>
 
         <section className="panel">
-          <h2>Backup y restauración</h2>
-          <p className="muted">Copia cifrada de tu configuración. Guarda la passphrase: sin ella el backup no se puede restaurar.</p>
+          <h2>Backup & restore</h2>
+          <p className="muted">Encrypted copy of your configuration. Keep the passphrase: without it the backup cannot be restored.</p>
           <form onSubmit={onCreateBackup}>
-            <label htmlFor="backup-pass">Passphrase del backup (mín. 12)</label>
+            <label htmlFor="backup-pass">Backup passphrase (min. 12)</label>
             <input id="backup-pass" type="password" value={backupPass} onInput={e => setBackupPass(e.currentTarget.value)} />
             <div className="actions-row">
               <button className="btn btn-primary" type="submit" disabled={backupBusy || backupPass.length < 12}>
-                {backupBusy ? 'Generando…' : 'Descargar backup'}
+                {backupBusy ? 'Generating…' : 'Download backup'}
               </button>
             </div>
           </form>
           <hr className="sep" />
           <form onSubmit={onRestoreBackup}>
-            <label htmlFor="restore-file">Archivo de backup (.bak)</label>
+            <label htmlFor="restore-file">Backup file (.bak)</label>
             <input id="restore-file" type="file" accept=".bak" onChange={e => setRestoreFile(e.currentTarget.files?.[0] || null)} />
-            <label htmlFor="restore-pass">Passphrase del backup</label>
+            <label htmlFor="restore-pass">Backup passphrase</label>
             <input id="restore-pass" type="password" value={restorePass} onInput={e => setRestorePass(e.currentTarget.value)} />
             <div className="actions-row">
               <button className="btn btn-danger" type="submit" disabled={restoreBusy || !restoreFile}>
-                {restoreBusy ? 'Restaurando…' : 'Restaurar'}
+                {restoreBusy ? 'Restoring…' : 'Restore'}
               </button>
             </div>
           </form>
@@ -960,35 +960,35 @@ export function App() {
     return (
       <>
         <section className="panel">
-          <h2>Servicios a exponer</h2>
-          <p className="muted">Cada servicio necesita subdominio y URL interna.</p>
+          <h2>Services to expose</h2>
+          <p className="muted">Each service needs a subdomain and an internal URL.</p>
           <div className="services-grid">
             {(cfg.services || []).map((svc, idx) => {
               const h = formatHealth(cfg.serviceHealth?.[serviceKey(svc)] || null);
               return (
                 <div key={idx} className="service-card">
-                  <input value={svc.name || ''} onInput={e => setService(idx, 'name', e.currentTarget.value)} placeholder="Nombre" />
-                  <input value={svc.subdomain || ''} onInput={e => setService(idx, 'subdomain', e.currentTarget.value)} placeholder="Subdominio" />
-                  <input value={svc.target || ''} onInput={e => setService(idx, 'target', e.currentTarget.value)} placeholder="http://IP:puerto" />
+                  <input value={svc.name || ''} onInput={e => setService(idx, 'name', e.currentTarget.value)} placeholder="Name" />
+                  <input value={svc.subdomain || ''} onInput={e => setService(idx, 'subdomain', e.currentTarget.value)} placeholder="Subdomain" />
+                  <input value={svc.target || ''} onInput={e => setService(idx, 'target', e.currentTarget.value)} placeholder="http://IP:port" />
                   <label className="check-inline">
                     <input type="checkbox" checked={Boolean(svc.enabled)} onChange={e => setService(idx, 'enabled', e.currentTarget.checked)} />
-                    Activo
+                    Enabled
                   </label>
                   <span className={`health-pill ${h.cls}`}>{h.text}</span>
-                  <button className="btn btn-danger" onClick={() => removeServiceRow(idx)}>Eliminar</button>
+                  <button className="btn btn-danger" onClick={() => removeServiceRow(idx)}>Delete</button>
                 </div>
               );
             })}
           </div>
           <div className="actions-row">
-            <button className="btn" onClick={addServiceRow}>Anadir servicio</button>
+            <button className="btn" onClick={addServiceRow}>Add service</button>
             <button className="btn" onClick={onRefreshHealth} disabled={healthBusy}>
-              {healthBusy ? 'Comprobando…' : 'Refrescar estado'}
+              {healthBusy ? 'Checking…' : 'Refresh status'}
             </button>
           </div>
         </section>
         <div className="actions-row">
-          <button className="btn btn-primary" onClick={onSaveConfig} disabled={loading}>Guardar configuracion</button>
+          <button className="btn btn-primary" onClick={onSaveConfig} disabled={loading}>Save configuration</button>
           {saveSuccessMsg ? <span className="save-inline-msg">{saveSuccessMsg}</span> : null}
         </div>
       </>
@@ -999,18 +999,18 @@ export function App() {
     return (
       <>
         <section className="panel">
-          <h2>Script de instalacion del VPS</h2>
-          <p className="muted">Ejecuta este script como root en tu VPS.</p>
+          <h2>VPS installation script</h2>
+          <p className="muted">Run this script as root on your VPS.</p>
           <div className="actions-row">
             <label className="check-inline">
               <input type="checkbox" checked={vpsScriptWithCrowdsec} onChange={e => setVpsScriptWithCrowdsec(e.currentTarget.checked)} />
-              Incluir CrowdSec
+              Include CrowdSec
             </label>
-            <button className="btn" onClick={() => loadVpsScript('manual')}>Recargar script</button>
+            <button className="btn" onClick={() => loadVpsScript('manual')}>Reload script</button>
             {scriptReloadMsg ? <span className="script-inline-msg">{scriptReloadMsg}</span> : null}
           </div>
 
-          {!scriptMeta ? <div className="alert alert-warn">Configura la IP del VPS y genera las claves primero.</div> : null}
+          {!scriptMeta ? <div className="alert alert-warn">Configure the VPS IP and generate keys first.</div> : null}
           {scriptMeta ? (
             <>
               <pre className="code-box">{scriptMeta.script}</pre>
@@ -1022,23 +1022,23 @@ export function App() {
                       <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
                         <path d="M6.2 11.4 3.3 8.5l-1 1 3.9 3.9L14 5.6l-1-1z" />
                       </svg>
-                      Copiado
+                      Copied
                     </span>
-                  ) : 'Copiar script'}
+                  ) : 'Copy script'}
                 </button>
-                <button className="btn" onClick={onDownloadScript}>Descargar .sh</button>
+                <button className="btn" onClick={onDownloadScript}>Download .sh</button>
               </div>
             </>
           ) : null}
         </section>
 
         <section className="panel">
-          <h2>Pasos de configuracion</h2>
+          <h2>Setup steps</h2>
           <ol className="steps">
-            <li className={cfg.publicKey ? 'done' : ''}>Generar claves</li>
-            <li className={cfg.publicKey && cfg.vpsIp ? 'done' : ''}>Configurar VPS IP</li>
-            <li className={cfg.publicKey && cfg.vpsIp ? 'done' : ''}>Ejecutar script en el VPS</li>
-            <li className={cfg.publicKey && cfg.vpsIp && cfg.vpsPubKey && cfg.domain && cfg.acmeEmail ? 'done' : ''}>Guardar configuracion y listo</li>
+            <li className={cfg.publicKey ? 'done' : ''}>Generate keys</li>
+            <li className={cfg.publicKey && cfg.vpsIp ? 'done' : ''}>Configure VPS IP</li>
+            <li className={cfg.publicKey && cfg.vpsIp ? 'done' : ''}>Run script on the VPS</li>
+            <li className={cfg.publicKey && cfg.vpsIp && cfg.vpsPubKey && cfg.domain && cfg.acmeEmail ? 'done' : ''}>Save configuration and done</li>
           </ol>
         </section>
       </>
@@ -1052,16 +1052,16 @@ export function App() {
         <header className="hero">
           <div>
             <h1>Umbrel Tunnel</h1>
-            <p className="muted">Canal seguro para infraestructura soberana.</p>
+            <p className="muted">Secure channel for sovereign infrastructure.</p>
           </div>
         </header>
         <div aria-live="polite" role="status">
           {message.text ? <div className={`alert ${message.kind === 'error' ? 'alert-error' : 'alert-success'}`}>{message.text}</div> : null}
         </div>
         <section className="panel">
-          <h2>{firstRun ? 'Crea una contraseña' : 'Iniciar sesión'}</h2>
+          <h2>{firstRun ? 'Create a password' : 'Sign in'}</h2>
           <form onSubmit={firstRun ? onSetInitialPassword : onLogin}>
-            <label htmlFor="login-password">Contraseña</label>
+            <label htmlFor="login-password">Password</label>
             <input
               id="login-password"
               type="password"
@@ -1071,7 +1071,7 @@ export function App() {
             />
             {firstRun ? (
               <>
-                <label htmlFor="login-confirm">Repite la contraseña</label>
+                <label htmlFor="login-confirm">Repeat the password</label>
                 <input
                   id="login-confirm"
                   type="password"
@@ -1079,12 +1079,12 @@ export function App() {
                   value={confirmPassword}
                   onInput={e => setConfirmPassword(e.currentTarget.value)}
                 />
-                <p className="muted">Mínimo 8 caracteres. Será necesaria para acceder al panel.</p>
+                <p className="muted">Minimum 8 characters. It will be required to access the dashboard.</p>
               </>
             ) : null}
             <div className="actions-row">
               <button className="btn btn-primary" type="submit" disabled={loading || !loginPassword}>
-                {loading ? 'Procesando…' : (firstRun ? 'Crear y entrar' : 'Entrar')}
+                {loading ? 'Processing…' : (firstRun ? 'Create and enter' : 'Sign in')}
               </button>
             </div>
           </form>
@@ -1096,7 +1096,7 @@ export function App() {
   if (gate === 'loading') {
     return (
       <main className="shell">
-        <div className="muted">Cargando…</div>
+        <div className="muted">Loading…</div>
       </main>
     );
   }
@@ -1116,7 +1116,7 @@ export function App() {
       <header className="hero">
         <div>
           <h1>Umbrel Tunnel</h1>
-          <p className="muted">Canal seguro para infraestructura soberana.</p>
+          <p className="muted">Secure channel for sovereign infrastructure.</p>
         </div>
         <div className="hero-right">
           <div className={`status-badge ${statusBadge.cls}`}>
@@ -1124,12 +1124,12 @@ export function App() {
             <span>{statusBadge.text}</span>
           </div>
           {authStatus.authenticated ? (
-            <button className="btn btn-logout" onClick={onLogout}>Salir</button>
+            <button className="btn btn-logout" onClick={onLogout}>Sign out</button>
           ) : null}
         </div>
       </header>
 
-      <nav className="tabbar" role="tablist" aria-label="Secciones">
+      <nav className="tabbar" role="tablist" aria-label="Sections">
         {TAB_ITEMS.map(item => (
           <button
             key={item.key}
@@ -1146,7 +1146,7 @@ export function App() {
       <div aria-live="polite" role="status">
         {message.text ? <div className={`alert ${message.kind === 'error' ? 'alert-error' : 'alert-success'}`}>{message.text}</div> : null}
       </div>
-      {loading ? <div className="muted">Cargando...</div> : null}
+      {loading ? <div className="muted">Loading...</div> : null}
       {content}
     </main>
   );

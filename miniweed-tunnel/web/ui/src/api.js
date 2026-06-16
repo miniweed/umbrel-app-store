@@ -24,7 +24,7 @@ export async function apiFetch(pathname, options = {}) {
     return response;
   } catch (err) {
     if (err && err.name === 'AbortError') {
-      const timeoutErr = new Error('La petición tardó demasiado (timeout). Revisa la conexión.');
+      const timeoutErr = new Error('The request took too long (timeout). Check your connection.');
       timeoutErr.status = 0;
       throw timeoutErr;
     }
@@ -228,7 +228,7 @@ export async function createBackup(passphrase, includeAudit = true) {
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    const error = new Error(payload.error || `Backup falló (${response.status})`);
+    const error = new Error(payload.error || `Backup failed (${response.status})`);
     error.status = response.status;
     throw error;
   }
@@ -251,7 +251,7 @@ export async function restoreBackup(buffer, passphrase) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error = new Error(payload.error || `Restore falló (${response.status})`);
+    const error = new Error(payload.error || `Restore failed (${response.status})`);
     error.status = response.status;
     error.payload = payload;
     throw error;

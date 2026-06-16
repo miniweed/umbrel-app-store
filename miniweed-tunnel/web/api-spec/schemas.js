@@ -18,7 +18,7 @@ function isValidIpv4(value) {
 }
 
 const OptionalIpv4OrEmptySchema = z.union([
-  z.string().refine(v => isValidIpv4(v), { message: 'IPv4 inválida' }),
+  z.string().refine(v => isValidIpv4(v), { message: 'Invalid IPv4' }),
   z.literal('')
 ]).optional();
 const OptionalPrivateKeyUpdateSchema = z.union([z.string().regex(WG_KEY_RE), z.literal(''), z.literal('••••')]).optional();

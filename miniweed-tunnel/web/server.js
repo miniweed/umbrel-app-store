@@ -347,7 +347,7 @@ function apiRateLimit(req, res, next) {
   if (entry.count > bucket.max) {
     const retryAfter = Math.max(1, Math.ceil((entry.resetAt - now) / 1000));
     res.setHeader('Retry-After', String(retryAfter));
-    return res.status(429).json({ error: 'Demasiadas peticiones, prueba de nuevo en un minuto' });
+    return res.status(429).json({ error: 'Too many requests, try again in a minute' });
   }
 
   return next();
@@ -369,7 +369,7 @@ function requireApiAuth(req, res, next) {
 
   if (!isAuthenticatedRequest(req, cfg)) {
     audit.log({ action: 'auth.fail', ip: req.ip, path: req.path });
-    return res.status(401).json({ error: 'No autorizado' });
+    return res.status(401).json({ error: 'Unauthorized' });
   }
   return next();
 }
@@ -720,7 +720,7 @@ function probeServiceTarget(target, timeoutMs = 4000) {
     try {
       parsed = new URL(target);
     } catch (err) {
-      return resolve({ ok: false, error: 'URL inválida' });
+      return resolve({ ok: false, error: 'Invalid URL' });
     }
     const isHttps = parsed.protocol === 'https:';
     if (!isHttps && parsed.protocol !== 'http:') {
@@ -732,11 +732,11 @@ function probeServiceTarget(target, timeoutMs = 4000) {
     // No bloquea RFC1918: exponer servicios internos es el propósito de la app.
     dns.lookup(hostname, { all: true }, (err, addresses) => {
       if (err || !addresses || addresses.length === 0) {
-        return resolve({ ok: false, error: 'No resoluble' });
+        return resolve({ ok: false, error: 'Not resolvable' });
       }
       const blocked = addresses.find(a => isDisallowedTargetIp(a.address));
       if (blocked) {
-        return resolve({ ok: false, error: 'Destino bloqueado' });
+        return resolve({ ok: false, error: 'Target blocked' });
       }
       const pinned = addresses[0];
 
@@ -817,7 +817,7 @@ async function computeVpsHealth(targets) {
         ok: false,
         checked: false,
         checkedAt: new Date().toISOString(),
-        message: 'Desactivado'
+        message: 'Disabled'
       };
       return;
     }
@@ -896,12 +896,12 @@ async function checkServicesHealth(services) {
   await Promise.all((services || []).map(async svc => {
     const key = serviceKey(svc);
     if (!svc.enabled || !svc.target) {
-      health[key] = { ok: false, checked: false, message: 'Desactivado o incompleto' };
+      health[key] = { ok: false, checked: false, message: 'Disabled or incomplete' };
       return;
     }
 
     if (isBlockedServiceTarget(svc.target)) {
-      health[key] = { ok: false, checked: false, message: 'Destino no permitido' };
+      health[key] = { ok: false, checked: false, message: 'Target not allowed' };
       return;
     }
 
@@ -911,13 +911,13 @@ async function checkServicesHealth(services) {
         ok: true,
         checked: true,
         statusCode: result.statusCode,
-        message: `Conectado (${result.statusCode})`
+        message: `Connected (${result.statusCode})`
       };
     } else {
       health[key] = {
         ok: false,
         checked: true,
-        message: 'Sin conexion'
+        message: 'No connection'
       };
     }
   }));
@@ -929,14 +929,14 @@ function validateConfig(cfg) {
   ensureVpsTargets(cfg);
 
   if ((cfg.services || []).length > MAX_SERVICES) {
-    errors.push(`Demasiados servicios: máximo ${MAX_SERVICES}`);
+    errors.push(`Too many services: max ${MAX_SERVICES}`);
   }
 
-  if (cfg.privateKey && !isWireGuardKey(cfg.privateKey)) errors.push('La clave privada de Umbrel no es válida');
-  if (cfg.publicKey && !isWireGuardKey(cfg.publicKey)) errors.push('La clave pública de Umbrel no es válida');
+  if (cfg.privateKey && !isWireGuardKey(cfg.privateKey)) errors.push('The Umbrel private key is invalid');
+  if (cfg.publicKey && !isWireGuardKey(cfg.publicKey)) errors.push('The Umbrel public key is invalid');
 
   if ((cfg.vpsTargets || []).length > MAX_VPS_TARGETS) {
-    errors.push(`Demasiados VPS configurados: máximo ${MAX_VPS_TARGETS}`);
+    errors.push(`Too many VPS configured: max ${MAX_VPS_TARGETS}`);
   }
 
   for (const [index, target] of (cfg.vpsTargets || []).entries()) {
@@ -945,10 +945,10 @@ function validateConfig(cfg) {
       errors.push(`El puerto WireGuard de ${label} debe estar entre 1 y 65535`);
     }
     if (target.pubKey && !isWireGuardKey(target.pubKey)) {
-      errors.push(`La clave pública de ${label} no es válida`);
+      errors.push(`The public key of ${label} is invalid`);
     }
     if (target.ip && !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(target.ip) && !isHostname(target.ip)) {
-      errors.push(`La IP/host de ${label} no es válida`);
+      errors.push(`The IP/host of ${label} is invalid`);
     }
   }
 
@@ -956,21 +956,21 @@ function validateConfig(cfg) {
     errors.push('Configura al menos un VPS habilitado con IP/host');
   }
 
-  if (cfg.domain && !isHostname(cfg.domain)) errors.push('El dominio principal no es válido');
-  if (!isEmail(cfg.acmeEmail)) errors.push('El email de Let\'s Encrypt no es válido');
+  if (cfg.domain && !isHostname(cfg.domain)) errors.push('The main domain is invalid');
+  if (!isEmail(cfg.acmeEmail)) errors.push('The Let\'s Encrypt email is invalid');
 
   const seenHosts = new Set();
   for (const [index, svc] of (cfg.services || []).entries()) {
-    if (!isSubdomain(svc.subdomain)) errors.push(`El subdominio del servicio ${index + 1} no es válido`);
-    if (svc.target && !isTargetUrl(svc.target)) errors.push(`La URL interna del servicio ${index + 1} no es válida`);
+    if (!isSubdomain(svc.subdomain)) errors.push(`The subdomain of service ${index + 1} is invalid`);
+    if (svc.target && !isTargetUrl(svc.target)) errors.push(`The internal URL of service ${index + 1} is invalid`);
     if (svc.target && isBlockedServiceTarget(svc.target)) {
-      errors.push(`La URL interna del servicio ${index + 1} apunta a un destino reservado o de control`);
+      errors.push(`The internal URL of service ${index + 1} points to a reserved or control target`);
     }
 
     if (cfg.domain && svc.enabled && svc.target) {
       const host = svc.subdomain ? `${svc.subdomain}.${cfg.domain}`.toLowerCase() : cfg.domain.toLowerCase();
       if (seenHosts.has(host)) {
-        errors.push(`Hay dos servicios usando el mismo host público (${host})`);
+        errors.push(`Two services use the same public host (${host})`);
       }
       seenHosts.add(host);
     }
@@ -987,11 +987,11 @@ async function computeHealth(cfg) {
   await Promise.all(services.map(async svc => {
     const key = serviceKey(svc);
     if (!svc.enabled || !svc.target) {
-      out[key] = { ok: false, checked: false, message: 'Desactivado o incompleto' };
+      out[key] = { ok: false, checked: false, message: 'Disabled or incomplete' };
       return;
     }
     if (isBlockedServiceTarget(svc.target)) {
-      out[key] = { ok: false, checked: false, message: 'Destino no permitido' };
+      out[key] = { ok: false, checked: false, message: 'Target not allowed' };
       return;
     }
     const dnsHost = cfg.domain ? (svc.subdomain ? `${svc.subdomain}.${cfg.domain}` : cfg.domain) : null;
@@ -1072,8 +1072,8 @@ function parseBackupEntries(buffer) {
 }
 
 function restoreBackupPayload(payload, passphrase) {
-  if (!Buffer.isBuffer(payload) || payload.length < 48) throw new Error('backup payload inválido');
-  if (payload.slice(0, 4).toString('utf8') !== 'MWBK') throw new Error('backup magic inválido');
+  if (!Buffer.isBuffer(payload) || payload.length < 48) throw new Error('invalid backup payload');
+  if (payload.slice(0, 4).toString('utf8') !== 'MWBK') throw new Error('invalid backup magic');
   const salt = payload.slice(4, 20);
   const nonce = payload.slice(20, 32);
   const tag = payload.slice(payload.length - 16);
@@ -1180,7 +1180,7 @@ app.post('/api/config', async (req, res) => {
       const errors = validateConfig(cfg);
       const emailCheck = await validateEmailWithMx(cfg.acmeEmail);
       if (!emailCheck.ok) {
-        errors.push(`El email de Let's Encrypt no supera validación MX (${emailCheck.reason})`);
+        errors.push(`The Let's Encrypt email failed MX validation (${emailCheck.reason})`);
       }
       if (errors.length) return { errors };
 
@@ -1204,7 +1204,7 @@ app.post('/api/config', async (req, res) => {
     if (result.errors) return res.status(400).json({ errors: result.errors });
     return res.json(result);
   } catch (err) {
-    return res.status(500).json({ error: `Error guardando configuracion: ${err.message}` });
+    return res.status(500).json({ error: `Error saving configuration: ${err.message}` });
   }
 });
 
@@ -1249,13 +1249,13 @@ app.post('/api/auth/password', validateBody(AuthPasswordSchema), async (req, res
     });
   } catch (err) {
     audit.log({ action: 'auth.password.error', ip: req.ip });
-    return res.status(500).json({ error: 'Error guardando contraseña' });
+    return res.status(500).json({ error: 'Error saving password' });
   }
   if (denied) {
     const delay = authFailureDelayMs(authClientIp(req));
     await new Promise(resolve => setTimeout(resolve, delay));
     audit.log({ action: 'auth.password.denied', ip: req.ip });
-    return res.status(401).json({ error: 'No autorizado' });
+    return res.status(401).json({ error: 'Unauthorized' });
   }
   if (changed) audit.log({ action: 'auth.password.set', ip: req.ip });
   return res.json({ ok: true });
@@ -1267,14 +1267,14 @@ app.post('/api/auth/login', validateBody(AuthLoginSchema), asyncHandler(async (r
 
   const cfg = loadConfig();
   const hash = cfg.auth?.passwordHash || '';
-  if (!hash) return res.status(400).json({ error: 'password no configurada' });
+  if (!hash) return res.status(400).json({ error: 'password not set' });
 
   const ok = verifyPassword(password, hash);
   if (!ok) {
     const delay = authFailureDelayMs(ip);
     await new Promise(resolve => setTimeout(resolve, delay));
     audit.log({ action: 'auth.fail', ip, path: '/api/auth/login' });
-    return res.status(401).json({ error: 'credenciales inválidas' });
+    return res.status(401).json({ error: 'invalid credentials' });
   }
 
   clearAuthFailures(ip);
@@ -1316,7 +1316,7 @@ app.get('/api/auth/sessions', (req, res) => {
 
 app.delete('/api/auth/sessions/:id', asyncHandler(async (req, res) => {
   const sessionId = String(req.params.id || '').trim();
-  if (!sessionId) return res.status(400).json({ error: 'session id requerida' });
+  if (!sessionId) return res.status(400).json({ error: 'session id required' });
   const now = Date.now();
   await withConfigLock(async () => {
     const cfg = loadConfig();
@@ -1332,14 +1332,14 @@ app.delete('/api/auth/sessions/:id', asyncHandler(async (req, res) => {
 app.post('/api/auth/pubkeys', asyncHandler(async (req, res) => {
   const name = String(req.body?.name || '').trim();
   const inputKey = String(req.body?.publicKey || '').trim();
-  if (!name || !inputKey) return res.status(400).json({ error: 'name y publicKey requeridos' });
+  if (!name || !inputKey) return res.status(400).json({ error: 'name and publicKey are required' });
   const publicKey = parseEd25519PublicKey(inputKey);
   if (!publicKey) {
-    return res.status(400).json({ error: 'publicKey inválida (acepta base64 DER SPKI o ssh-ed25519)' });
+    return res.status(400).json({ error: 'invalid publicKey (accepts base64 DER SPKI or ssh-ed25519)' });
   }
   const keyObject = crypto.createPublicKey({ key: Buffer.from(publicKey, 'base64'), format: 'der', type: 'spki' });
   if (keyObject.asymmetricKeyType !== 'ed25519') {
-    return res.status(400).json({ error: 'solo se permiten claves ed25519' });
+    return res.status(400).json({ error: 'only ed25519 keys are allowed' });
   }
   const keyId = crypto.createHash('sha256').update(publicKey).digest('hex').slice(0, 16);
   await withConfigLock(async () => {
@@ -1363,7 +1363,7 @@ app.get('/api/auth/pubkeys', (req, res) => {
 
 app.delete('/api/auth/pubkeys/:id', asyncHandler(async (req, res) => {
   const keyId = String(req.params.id || '').trim();
-  if (!keyId) return res.status(400).json({ error: 'key id requerida' });
+  if (!keyId) return res.status(400).json({ error: 'key id required' });
   await withConfigLock(async () => {
     const cfg = loadConfig();
     cfg.auth = cfg.auth || {};
@@ -1377,11 +1377,11 @@ app.delete('/api/auth/pubkeys/:id', asyncHandler(async (req, res) => {
 
 app.post('/api/auth/challenge', (req, res) => {
   const keyId = String(req.body?.keyId || '').trim();
-  if (!keyId) return res.status(400).json({ error: 'keyId requerido' });
+  if (!keyId) return res.status(400).json({ error: 'keyId required' });
   const cfg = loadConfig();
   const pubkeys = Array.isArray(cfg.auth?.pubkeys) ? cfg.auth.pubkeys : [];
   const key = pubkeys.find(p => p.id === keyId);
-  if (!key) return res.status(401).json({ error: 'clave no registrada' });
+  if (!key) return res.status(401).json({ error: 'key not registered' });
   const challengeId = crypto.randomBytes(16).toString('hex');
   const nonce = crypto.randomBytes(32).toString('base64');
   const now = Date.now();
@@ -1399,19 +1399,19 @@ app.post('/api/auth/verify', asyncHandler(async (req, res) => {
   const challengeId = String(req.body?.challengeId || '').trim();
   const signatureB64 = String(req.body?.signature || '').trim();
   if (!challengeId || !signatureB64) {
-    return res.status(400).json({ error: 'challengeId y signature requeridos' });
+    return res.status(400).json({ error: 'challengeId and signature are required' });
   }
   const challenge = authChallenges.get(challengeId);
   if (!challenge || challenge.expiresAt <= Date.now()) {
     authChallenges.delete(challengeId);
-    return res.status(401).json({ error: 'challenge expirada o inválida' });
+    return res.status(401).json({ error: 'challenge expired or invalid' });
   }
   authChallenges.delete(challengeId);
 
   const cfg = loadConfig();
   const pubkeys = Array.isArray(cfg.auth?.pubkeys) ? cfg.auth.pubkeys : [];
   const key = pubkeys.find(p => p.id === challenge.keyId);
-  if (!key) return res.status(401).json({ error: 'clave no encontrada' });
+  if (!key) return res.status(401).json({ error: 'key not found' });
 
   let verified = false;
   try {
@@ -1422,7 +1422,7 @@ app.post('/api/auth/verify', asyncHandler(async (req, res) => {
   }
   if (!verified) {
     audit.log({ action: 'auth.fail', ip: req.ip || req.socket?.remoteAddress || 'unknown', path: '/api/auth/verify' });
-    return res.status(401).json({ error: 'firma inválida' });
+    return res.status(401).json({ error: 'invalid signature' });
   }
 
   const ip = req.ip || req.socket?.remoteAddress || 'unknown';
@@ -1473,7 +1473,7 @@ app.post('/api/vps/failover', async (req, res) => {
   }
   const target = (cfg.vpsTargets || []).find(t => t.id === requestedId && t.enabled && t.ip && t.pubKey);
   if (!target) {
-    return res.status(404).json({ error: 'VPS objetivo no encontrado o incompleto' });
+    return res.status(404).json({ error: 'target VPS not found or incomplete' });
   }
   cfg.activeVpsId = target.id;
   ensureVpsTargets(cfg);
@@ -1565,13 +1565,13 @@ app.post('/api/backup', (req, res) => {
 app.post('/api/restore', express.raw({ type: 'application/octet-stream', limit: '15mb' }), (req, res) => {
   const passphrase = req.get('x-backup-passphrase') || '';
   if (!passphrase || passphrase.length < 12) {
-    return res.status(400).json({ error: 'passphrase inválida' });
+    return res.status(400).json({ error: 'invalid passphrase' });
   }
   try {
     const entries = restoreBackupPayload(Buffer.from(req.body), passphrase);
     const meta = entries['meta.json'] ? JSON.parse(entries['meta.json']) : null;
     if (!meta || meta.version !== 1) {
-      return res.status(400).json({ error: 'meta inválida en backup' });
+      return res.status(400).json({ error: 'invalid meta in backup' });
     }
 
     if (entries['config.json']) {
@@ -1585,7 +1585,7 @@ app.post('/api/restore', express.raw({ type: 'application/octet-stream', limit: 
           issues: parsedConfig.error.issues
         });
         return res.status(400).json({
-          error: 'config en backup no pasa validación',
+          error: 'config in backup failed validation',
           issues: parsedConfig.error.issues
         });
       }
@@ -1618,7 +1618,7 @@ app.get('/api/vps-setup-script', (req, res) => {
   const cfg = loadConfig();
   const selected = getActiveVpsTarget(cfg);
   if (!cfg.publicKey || !selected?.ip) {
-    return res.status(400).json({ error: 'Configura la IP del VPS y genera las claves primero' });
+    return res.status(400).json({ error: 'Configure the VPS IP and generate keys first' });
   }
   const withCrowdsec = String(req.query.withCrowdsec || '').trim() === '1';
   const script = generateVpsScript(cfg, selected, { withCrowdsec });
@@ -1669,17 +1669,17 @@ app.post('/api/rotate/prepare', validateBody(RotatePrepareSchema), async (req, r
   const cfg = loadConfig();
   const active = getActiveVpsTarget(cfg);
   if (!active?.ip || !active?.pubKey || !cfg.publicKey || !cfg.privateKey) {
-    return res.status(400).json({ error: 'Configuración incompleta para rotación' });
+    return res.status(400).json({ error: 'Incomplete configuration for rotation' });
   }
   try {
     const body = req.body || {};
     let keys = null;
     if (body.nextPrivateKey && body.nextPublicKey) {
       if (!isWireGuardKey(body.nextPrivateKey) || !isWireGuardKey(body.nextPublicKey)) {
-        return res.status(400).json({ error: 'nextPrivateKey/nextPublicKey inválidas' });
+        return res.status(400).json({ error: 'invalid nextPrivateKey/nextPublicKey' });
       }
       if (body.nextPresharedKey && !isWireGuardKey(body.nextPresharedKey)) {
-        return res.status(400).json({ error: 'nextPresharedKey inválida' });
+        return res.status(400).json({ error: 'invalid nextPresharedKey' });
       }
       keys = {
         privateKey: body.nextPrivateKey,
@@ -1723,7 +1723,7 @@ app.post('/api/rotate/prepare', validateBody(RotatePrepareSchema), async (req, r
       target: { id: active.id, name: active.name, ip: active.ip }
     });
   } catch (err) {
-    return res.status(503).json({ error: `No se pudo preparar rotación: ${err.message}` });
+    return res.status(503).json({ error: `Could not prepare rotation: ${err.message}` });
   }
 });
 
@@ -1733,7 +1733,7 @@ app.post('/api/rotate/confirm', validateBody(RotateConfirmSchema), async (req, r
   const plan = rotationPlans.get(planId);
   if (!plan || plan.expiresAt <= Date.now()) {
     rotationPlans.delete(planId);
-    return res.status(404).json({ error: 'Plan de rotación no encontrado o expirado' });
+    return res.status(404).json({ error: 'Rotation plan not found or expired' });
   }
 
   if (!apply) {
@@ -1761,7 +1761,7 @@ app.get('/api/rotate/:planId', (req, res) => {
   const plan = rotationPlans.get(req.params.planId);
   if (!plan || plan.expiresAt <= Date.now()) {
     if (plan) rotationPlans.delete(req.params.planId);
-    return res.status(404).json({ error: 'Plan no encontrado o expirado' });
+    return res.status(404).json({ error: 'Plan not found or expired' });
   }
   return res.json({
     id: plan.id,
@@ -1784,7 +1784,7 @@ app.use((err, req, res, next) => {
   try {
     audit.log({ action: 'request.error', ip: req.ip, path: req.path });
   } catch {}
-  return res.status(500).json({ error: 'Error interno' });
+  return res.status(500).json({ error: 'Internal error' });
 });
 
 // ── boot ─────────────────────────────────────────────────────────────────────
