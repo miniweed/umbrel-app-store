@@ -1,12 +1,35 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
-import { getConfig, getStatus, getVpsSetupScript, keygen, saveConfig } from './api.js';
+import {
+  addPubkey,
+  createBackup,
+  getAuthStatus,
+  getConfig,
+  getKillSwitchScript,
+  getPubkeys,
+  getSessions,
+  getStatus,
+  getVpsSetupScript,
+  getVpsTargets,
+  keygen,
+  login,
+  logout,
+  refreshHealth,
+  removePubkey,
+  restoreBackup,
+  revokeSession,
+  rotateConfirm,
+  rotatePrepare,
+  saveConfig,
+  setPassword,
+  triggerFailover
+} from './api.js';
 
 const TAB_ITEMS = [
   { key: 'dashboard', label: 'Panel' },
-  { key: 'config', label: 'Configuracion' },
-  { key: 'optional', label: 'Configuracion opcional' },
   { key: 'services', label: 'Servicios' },
-  { key: 'vps', label: 'Setup VPS' }
+  { key: 'config', label: 'Configuracion' },
+  { key: 'vps', label: 'Setup VPS' },
+  { key: 'optional', label: 'Configuracion opcional' }
 ];
 
 const EMPTY_SERVICE = { name: '', subdomain: '', target: '', enabled: true };
@@ -54,6 +77,32 @@ export function App() {
   const [scriptMeta, setScriptMeta] = useState(null);
   const [scriptReloadMsg, setScriptReloadMsg] = useState('');
   const [scriptCopied, setScriptCopied] = useState(false);
+  const [vpsTargets, setVpsTargets] = useState(null);
+  const [activeVpsId, setActiveVpsId] = useState('');
+  const [vpsBusy, setVpsBusy] = useState('');
+  const [healthBusy, setHealthBusy] = useState(false);
+  // Gating de sesión: 'loading' | 'login' | 'ready'
+  const [gate, setGate] = useState('loading');
+  const [authStatus, setAuthStatus] = useState({ hasPassword: false, authenticated: false });
+  const [loginPassword, setLoginPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [sessions, setSessions] = useState(null);
+  const [rotation, setRotation] = useState(null); // plan de rotación en curso
+  const [rotationBusy, setRotationBusy] = useState(false);
+  const [killSwitch, setKillSwitch] = useState(null);
+  const [killSwitchBusy, setKillSwitchBusy] = useState(false);
+  const [pubkeys, setPubkeys] = useState(null);
+  const [newPubkeyName, setNewPubkeyName] = useState('');
+  const [newPubkeyValue, setNewPubkeyValue] = useState('');
+  const [pubkeyBusy, setPubkeyBusy] = useState(false);
+  const [pwdCurrent, setPwdCurrent] = useState('');
+  const [pwdNew, setPwdNew] = useState('');
+  const [pwdBusy, setPwdBusy] = useState(false);
+  const [backupPass, setBackupPass] = useState('');
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [restorePass, setRestorePass] = useState('');
+  const [restoreFile, setRestoreFile] = useState(null);
+  const [restoreBusy, setRestoreBusy] = useState(false);
 
   const setupIncomplete = !cfg.publicKey || !cfg.vpsPubKey || !cfg.vpsIp;
   const scriptMissingPublicKey = !cfg.publicKey;
@@ -101,15 +150,347 @@ export function App() {
     }
   }
 
+  async function loadVpsTargets() {
+    try {
+      const data = await getVpsTargets();
+      setVpsTargets(Array.isArray(data?.targets) ? data.targets : []);
+      setActiveVpsId(data?.activeVpsId || '');
+    } catch (err) {
+      setVpsTargets([]);
+      setMessage({ text: err.message || 'No se pudieron cargar los VPS.', kind: 'error' });
+    }
+  }
+
+  async function onFailover(targetId) {
+    const label = targetId ? 'cambiar el VPS activo' : 'ejecutar failover automático';
+    if (!window.confirm(`¿Seguro que quieres ${label}? El túnel se reconfigurará.`)) return;
+    setVpsBusy(targetId || 'auto');
+    setMessage({ text: '', kind: '' });
+    try {
+      const res = await triggerFailover(targetId);
+      await loadVpsTargets();
+      const to = res?.next?.name || res?.next?.id || res?.activeVpsId || '';
+      setMessage({
+        text: res?.switched === false
+          ? 'No fue necesario cambiar de VPS.'
+          : `VPS activo actualizado${to ? `: ${to}` : ''}.`,
+        kind: 'success'
+      });
+    } catch (err) {
+      setMessage({ text: err.message || 'No se pudo cambiar de VPS.', kind: 'error' });
+    } finally {
+      setVpsBusy('');
+    }
+  }
+
+  async function onRefreshHealth() {
+    setHealthBusy(true);
+    setMessage({ text: '', kind: '' });
+    try {
+      await refreshHealth();
+      await refreshConfigOnly();
+      setMessage({ text: 'Estado de servicios actualizado.', kind: 'success' });
+    } catch (err) {
+      setMessage({ text: err.message || 'No se pudo actualizar el estado.', kind: 'error' });
+    } finally {
+      setHealthBusy(false);
+    }
+  }
+
+  async function bootstrap() {
+    try {
+      setAuthStatus(await getAuthStatus());
+    } catch {
+      // status no disponible: seguimos, el gate lo decide la carga de config
+    }
+    try {
+      await Promise.all([refreshConfigOnly(), refreshStatusOnly()]);
+      setGate('ready');
+    } catch (err) {
+      if (err.status === 401) {
+        setGate('login');
+      } else {
+        // Error no de auth (p.ej. backend caído): mostramos la app igual.
+        setGate('ready');
+        setMessage({ text: err.message || 'No se pudo cargar la configuración.', kind: 'error' });
+      }
+    }
+  }
+
+  async function onLogin(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    setLoading(true);
+    setMessage({ text: '', kind: '' });
+    try {
+      await login(loginPassword);
+      setLoginPassword('');
+      setGate('ready');
+      setAuthStatus(s => ({ ...s, authenticated: true }));
+      await refreshAll();
+    } catch (err) {
+      setMessage({ text: err.message || 'No se pudo iniciar sesión.', kind: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onSetInitialPassword(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (loginPassword.length < 8) {
+      setMessage({ text: 'La contraseña debe tener al menos 8 caracteres.', kind: 'error' });
+      return;
+    }
+    if (loginPassword !== confirmPassword) {
+      setMessage({ text: 'Las contraseñas no coinciden.', kind: 'error' });
+      return;
+    }
+    setLoading(true);
+    setMessage({ text: '', kind: '' });
+    try {
+      await setPassword(loginPassword);
+      await login(loginPassword);
+      setLoginPassword('');
+      setConfirmPassword('');
+      setGate('ready');
+      setAuthStatus({ hasPassword: true, authenticated: true });
+      await refreshAll();
+    } catch (err) {
+      setMessage({ text: err.message || 'No se pudo crear la contraseña.', kind: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onLogout() {
+    if (!window.confirm('¿Cerrar sesión?')) return;
+    try {
+      await logout();
+    } catch {
+      // ignoramos: igualmente volvemos al login
+    }
+    setAuthStatus(s => ({ ...s, authenticated: false }));
+    setGate('login');
+  }
+
+  async function loadSessions() {
+    try {
+      const data = await getSessions();
+      setSessions(Array.isArray(data?.sessions) ? data.sessions : []);
+    } catch (err) {
+      setSessions([]);
+      setMessage({ text: err.message || 'No se pudieron cargar las sesiones.', kind: 'error' });
+    }
+  }
+
+  async function onRevokeSession(id, isCurrent) {
+    if (!window.confirm(isCurrent ? 'Esta es tu sesión actual. ¿Cerrarla?' : '¿Revocar esta sesión?')) return;
+    try {
+      await revokeSession(id);
+      if (isCurrent) {
+        setAuthStatus(s => ({ ...s, authenticated: false }));
+        setGate('login');
+        return;
+      }
+      await loadSessions();
+      setMessage({ text: 'Sesión revocada.', kind: 'success' });
+    } catch (err) {
+      setMessage({ text: err.message || 'No se pudo revocar la sesión.', kind: 'error' });
+    }
+  }
+
   useEffect(() => {
-    refreshAll();
-    const timer = setInterval(refreshStatusOnly, 8000);
-    return () => clearInterval(timer);
+    bootstrap();
   }, []);
 
   useEffect(() => {
+    if (gate !== 'ready') return undefined;
+    const timer = setInterval(refreshStatusOnly, 8000);
+    return () => clearInterval(timer);
+  }, [gate]);
+
+  async function onRotatePrepare() {
+    if (!window.confirm(
+      'Se generarán claves nuevas y un script para el VPS. El túnel NO cambia hasta que ' +
+      'ejecutes el script en el VPS y confirmes aquí. ¿Continuar?'
+    )) return;
+    setRotationBusy(true);
+    setMessage({ text: '', kind: '' });
+    try {
+      const plan = await rotatePrepare();
+      setRotation(plan);
+      setMessage({ text: 'Plan de rotación creado. Ejecuta el script en el VPS y confirma.', kind: 'success' });
+    } catch (err) {
+      setMessage({ text: err.message || 'No se pudo preparar la rotación.', kind: 'error' });
+    } finally {
+      setRotationBusy(false);
+    }
+  }
+
+  async function onRotateConfirm(apply) {
+    if (!rotation?.planId) return;
+    if (apply && !window.confirm('¿Aplicar las claves nuevas? Solo confirma si ya ejecutaste el script en el VPS.')) return;
+    setRotationBusy(true);
+    setMessage({ text: '', kind: '' });
+    try {
+      await rotateConfirm(rotation.planId, apply);
+      setRotation(null);
+      if (apply) await refreshConfigOnly();
+      setMessage({ text: apply ? 'Claves rotadas correctamente.' : 'Rotación cancelada.', kind: 'success' });
+    } catch (err) {
+      setMessage({ text: err.message || 'No se pudo completar la rotación.', kind: 'error' });
+    } finally {
+      setRotationBusy(false);
+    }
+  }
+
+  async function onLoadKillSwitch() {
+    setKillSwitchBusy(true);
+    setMessage({ text: '', kind: '' });
+    try {
+      setKillSwitch(await getKillSwitchScript());
+    } catch (err) {
+      setMessage({ text: err.message || 'No se pudo generar el kill-switch.', kind: 'error' });
+    } finally {
+      setKillSwitchBusy(false);
+    }
+  }
+
+  function downloadText(filename, text) {
+    const blob = new Blob([`${text}\n`], { type: 'text/x-shellscript;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  async function loadPubkeys() {
+    try {
+      const data = await getPubkeys();
+      setPubkeys(Array.isArray(data?.pubkeys) ? data.pubkeys : []);
+    } catch (err) {
+      setPubkeys([]);
+      setMessage({ text: err.message || 'No se pudieron cargar las claves.', kind: 'error' });
+    }
+  }
+
+  async function onAddPubkey(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!newPubkeyName.trim() || !newPubkeyValue.trim()) return;
+    setPubkeyBusy(true);
+    setMessage({ text: '', kind: '' });
+    try {
+      await addPubkey(newPubkeyName.trim(), newPubkeyValue.trim());
+      setNewPubkeyName('');
+      setNewPubkeyValue('');
+      await loadPubkeys();
+      setMessage({ text: 'Clave añadida.', kind: 'success' });
+    } catch (err) {
+      setMessage({ text: err.message || 'No se pudo añadir la clave.', kind: 'error' });
+    } finally {
+      setPubkeyBusy(false);
+    }
+  }
+
+  async function onRemovePubkey(id, name) {
+    if (!window.confirm(`¿Revocar la clave "${name || id}"?`)) return;
+    try {
+      await removePubkey(id);
+      await loadPubkeys();
+      setMessage({ text: 'Clave revocada.', kind: 'success' });
+    } catch (err) {
+      setMessage({ text: err.message || 'No se pudo revocar la clave.', kind: 'error' });
+    }
+  }
+
+  async function onChangePassword(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (pwdNew.length < 8) {
+      setMessage({ text: 'La nueva contraseña debe tener al menos 8 caracteres.', kind: 'error' });
+      return;
+    }
+    setPwdBusy(true);
+    setMessage({ text: '', kind: '' });
+    try {
+      // Con sesión activa basta; enviamos currentPassword por si acaso.
+      await setPassword(pwdNew, pwdCurrent || undefined);
+      setPwdCurrent('');
+      setPwdNew('');
+      setMessage({ text: 'Contraseña actualizada. Se cerraron las demás sesiones.', kind: 'success' });
+      await loadSessions();
+    } catch (err) {
+      setMessage({ text: err.message || 'No se pudo cambiar la contraseña.', kind: 'error' });
+    } finally {
+      setPwdBusy(false);
+    }
+  }
+
+  async function onCreateBackup(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (backupPass.length < 12) {
+      setMessage({ text: 'La passphrase del backup debe tener al menos 12 caracteres.', kind: 'error' });
+      return;
+    }
+    setBackupBusy(true);
+    setMessage({ text: '', kind: '' });
+    try {
+      const blob = await createBackup(backupPass, true);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `miniweed-backup-${Date.now()}.bak`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setBackupPass('');
+      setMessage({ text: 'Backup descargado.', kind: 'success' });
+    } catch (err) {
+      setMessage({ text: err.message || 'No se pudo crear el backup.', kind: 'error' });
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+  async function onRestoreBackup(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!restoreFile) {
+      setMessage({ text: 'Selecciona un archivo de backup.', kind: 'error' });
+      return;
+    }
+    if (restorePass.length < 12) {
+      setMessage({ text: 'Introduce la passphrase del backup (mín. 12).', kind: 'error' });
+      return;
+    }
+    if (!window.confirm('Restaurar sobrescribirá la configuración actual. ¿Continuar?')) return;
+    setRestoreBusy(true);
+    setMessage({ text: '', kind: '' });
+    try {
+      const buffer = await restoreFile.arrayBuffer();
+      await restoreBackup(buffer, restorePass);
+      setRestorePass('');
+      setRestoreFile(null);
+      await refreshAll();
+      setMessage({ text: 'Backup restaurado correctamente.', kind: 'success' });
+    } catch (err) {
+      setMessage({ text: err.message || 'No se pudo restaurar el backup.', kind: 'error' });
+    } finally {
+      setRestoreBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (gate !== 'ready') return;
     if (tab === 'vps') loadVpsScript();
-  }, [tab, vpsScriptWithCrowdsec]);
+    if (tab === 'optional') {
+      loadVpsTargets();
+      loadSessions();
+      loadPubkeys();
+    }
+  }, [tab, vpsScriptWithCrowdsec, gate]);
 
   const statusBadge = useMemo(() => {
     if (status.connected) return { cls: 'connected', text: 'Conectado' };
@@ -135,6 +516,9 @@ export function App() {
   }
 
   function removeServiceRow(index) {
+    const svc = (cfg.services || [])[index];
+    const name = svc?.name || svc?.subdomain || svc?.target || 'este servicio';
+    if (!window.confirm(`¿Eliminar ${name}? Guarda para aplicar el cambio.`)) return;
     setCfg(current => ({
       ...current,
       services: current.services.filter((_, i) => i !== index)
@@ -188,6 +572,10 @@ export function App() {
   }
 
   async function onGenerateKeys() {
+    if (cfg.publicKey && !window.confirm(
+      'Regenerar las claves invalidará la conexión actual con el VPS. ' +
+      'Tendrás que volver a ejecutar el script en el VPS. ¿Continuar?'
+    )) return;
     setLoading(true);
     try {
       const data = await keygen();
@@ -267,7 +655,7 @@ export function App() {
                   <div key={`${svc.subdomain}-${svc.target}`} className="service-link-row">
                     <span className="muted">{svc.name || svc.target}</span>
                     <div className="service-link-meta">
-                      <code>{`https://${host}`}</code>
+                      <a href={`https://${host}`} target="_blank" rel="noopener noreferrer">{`https://${host}`}</a>
                       {duplicated ? <span className="duplicate-badge">host duplicado</span> : null}
                     </div>
                   </div>
@@ -290,8 +678,46 @@ export function App() {
           </label>
           <input className={scriptMissingPublicKey ? 'input-required-missing' : ''} value={cfg.publicKey || ''} readOnly />
           <div className="actions-row">
-            <button className="btn btn-primary" onClick={onGenerateKeys} disabled={loading}>Generar nuevas claves</button>
+            <button className="btn btn-primary" onClick={onGenerateKeys} disabled={loading}>
+              {cfg.publicKey ? 'Regenerar claves' : 'Generar claves'}
+            </button>
           </div>
+          {cfg.publicKey ? (
+            <div className="rotate-box">
+              <h3>Rotación segura de claves</h3>
+              <p className="muted">
+                A diferencia de «Regenerar», la rotación no corta el túnel: genera claves
+                nuevas y un script para el VPS, y solo las aplica cuando confirmas.
+              </p>
+              {!rotation ? (
+                <div className="actions-row">
+                  <button className="btn" onClick={onRotatePrepare} disabled={rotationBusy}>
+                    {rotationBusy ? 'Preparando…' : 'Iniciar rotación'}
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <p className="muted">
+                    Nueva huella: <code>{rotation.nextPublicKeyFingerprint || '—'}</code>
+                    {rotation.target?.ip ? ` · VPS ${rotation.target.name || rotation.target.id} (${rotation.target.ip})` : ''}
+                  </p>
+                  <ol className="steps">
+                    <li>Ejecuta este script como root en el VPS.</li>
+                    <li>Cuando termine, pulsa «Confirmar y aplicar».</li>
+                  </ol>
+                  <pre className="code-box">{rotation.script}</pre>
+                  <p className="muted">SHA-256: <code>{rotation.scriptSha256 || '-'}</code></p>
+                  <div className="actions-row">
+                    <button className="btn" onClick={() => downloadText('miniweed-rotate.sh', rotation.script)}>Descargar .sh</button>
+                    <button className="btn btn-primary" onClick={() => onRotateConfirm(true)} disabled={rotationBusy}>
+                      {rotationBusy ? 'Aplicando…' : 'Confirmar y aplicar'}
+                    </button>
+                    <button className="btn btn-danger" onClick={() => onRotateConfirm(false)} disabled={rotationBusy}>Cancelar</button>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : null}
         </section>
 
         <section className="panel">
@@ -333,12 +759,198 @@ export function App() {
     );
   }
 
+  function renderVpsHealth(health) {
+    if (!health) return <span className="health-pill">Sin datos</span>;
+    if (health.ok) return <span className="health-pill ok">Saludable</span>;
+    return <span className="health-pill error">{health.message || 'Sin conexión'}</span>;
+  }
+
   function renderOptionalConfig() {
     return (
       <>
         <section className="panel">
-          <h2>Configuracion opcional</h2>
-          <p className="muted">Sin opciones adicionales por ahora.</p>
+          <h2>Failover y VPS múltiples</h2>
+          <p className="muted">
+            Estado de los VPS candidatos. Puedes forzar el VPS activo o lanzar un
+            failover automático al candidato saludable de mayor prioridad.
+          </p>
+          <div className="actions-row">
+            <button className="btn" onClick={loadVpsTargets} disabled={Boolean(vpsBusy)}>Actualizar estado</button>
+            <button
+              className="btn btn-primary"
+              onClick={() => onFailover('')}
+              disabled={Boolean(vpsBusy)}
+            >
+              {vpsBusy === 'auto' ? 'Evaluando…' : 'Failover automático'}
+            </button>
+          </div>
+
+          {vpsTargets === null ? (
+            <p className="muted">Cargando VPS…</p>
+          ) : vpsTargets.length === 0 ? (
+            <div className="alert alert-info">
+              No hay VPS configurados. Añade la IP y la clave del VPS en Configuración.
+            </div>
+          ) : (
+            <div className="vps-list">
+              {vpsTargets.map(t => {
+                const isActive = t.id === activeVpsId;
+                return (
+                  <div key={t.id} className={`vps-row ${isActive ? 'active' : ''}`}>
+                    <div className="vps-row-main">
+                      <strong>{t.name || t.id}</strong>
+                      {isActive ? <span className="duplicate-badge">activo</span> : null}
+                      <span className="muted">{t.ip || 'sin IP'}:{t.port || 51820}</span>
+                    </div>
+                    <div className="vps-row-meta">
+                      {renderVpsHealth(t.health)}
+                      <span className="muted">prioridad {typeof t.priority === 'number' ? t.priority : '—'}</span>
+                      <button
+                        className="btn"
+                        disabled={isActive || Boolean(vpsBusy) || !t.enabled || !t.ip || !t.pubKey}
+                        onClick={() => onFailover(t.id)}
+                      >
+                        {vpsBusy === t.id ? 'Cambiando…' : 'Activar'}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        <section className="panel">
+          <h2>Kill-switch de emergencia</h2>
+          <p className="muted">
+            Script para detener WireGuard y bloquear el puerto UDP en el VPS si necesitas
+            cortar el túnel de inmediato. Ejecútalo como root en el VPS.
+          </p>
+          <div className="actions-row">
+            <button className="btn" onClick={onLoadKillSwitch} disabled={killSwitchBusy}>
+              {killSwitchBusy ? 'Generando…' : 'Generar kill-switch'}
+            </button>
+            {killSwitch ? (
+              <button className="btn" onClick={() => downloadText(killSwitch.filename || 'miniweed-killswitch.sh', killSwitch.script)}>
+                Descargar .sh
+              </button>
+            ) : null}
+          </div>
+          {killSwitch ? (
+            <>
+              <pre className="code-box">{killSwitch.script}</pre>
+              <p className="muted">SHA-256: <code>{killSwitch.sha256 || '-'}</code></p>
+            </>
+          ) : null}
+        </section>
+
+        <section className="panel">
+          <h2>Sesiones activas</h2>
+          <p className="muted">Dispositivos con sesión iniciada. Puedes revocar cualquiera.</p>
+          <div className="actions-row">
+            <button className="btn" onClick={loadSessions}>Actualizar</button>
+          </div>
+          {sessions === null ? (
+            <p className="muted">Cargando sesiones…</p>
+          ) : sessions.length === 0 ? (
+            <p className="muted">Sin sesiones activas (o la autenticación está deshabilitada).</p>
+          ) : (
+            <div className="vps-list">
+              {sessions.map(s => (
+                <div key={s.id} className={`vps-row ${s.current ? 'active' : ''}`}>
+                  <div className="vps-row-main">
+                    <strong>{s.source || 'sesión'}</strong>
+                    {s.current ? <span className="duplicate-badge">esta sesión</span> : null}
+                    <span className="muted">{s.ip || 'ip desconocida'}</span>
+                  </div>
+                  <div className="vps-row-meta">
+                    <span className="muted">expira {new Date(s.expiresAt).toLocaleString()}</span>
+                    <button className="btn btn-danger" onClick={() => onRevokeSession(s.id, s.current)}>
+                      {s.current ? 'Cerrar sesión' : 'Revocar'}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="panel">
+          <h2>Cambiar contraseña</h2>
+          <form onSubmit={onChangePassword}>
+            <label htmlFor="pwd-current">Contraseña actual (opcional si hay sesión)</label>
+            <input id="pwd-current" type="password" autoComplete="current-password" value={pwdCurrent} onInput={e => setPwdCurrent(e.currentTarget.value)} />
+            <label htmlFor="pwd-new">Nueva contraseña</label>
+            <input id="pwd-new" type="password" autoComplete="new-password" value={pwdNew} onInput={e => setPwdNew(e.currentTarget.value)} />
+            <p className="muted">Mínimo 8 caracteres. Al cambiarla se cerrarán las demás sesiones.</p>
+            <div className="actions-row">
+              <button className="btn btn-primary" type="submit" disabled={pwdBusy || !pwdNew}>
+                {pwdBusy ? 'Guardando…' : 'Cambiar contraseña'}
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section className="panel">
+          <h2>Claves de acceso CLI</h2>
+          <p className="muted">Claves públicas (ed25519) autorizadas para autenticación por línea de comandos.</p>
+          <form onSubmit={onAddPubkey}>
+            <label htmlFor="pk-name">Nombre</label>
+            <input id="pk-name" value={newPubkeyName} onInput={e => setNewPubkeyName(e.currentTarget.value)} placeholder="laptop-cli" />
+            <label htmlFor="pk-value">Clave pública</label>
+            <input id="pk-value" value={newPubkeyValue} onInput={e => setNewPubkeyValue(e.currentTarget.value)} placeholder="ssh-ed25519 AAAA… o DER base64" />
+            <div className="actions-row">
+              <button className="btn" type="submit" disabled={pubkeyBusy || !newPubkeyName || !newPubkeyValue}>
+                {pubkeyBusy ? 'Añadiendo…' : 'Añadir clave'}
+              </button>
+            </div>
+          </form>
+          {pubkeys === null ? (
+            <p className="muted">Cargando claves…</p>
+          ) : pubkeys.length === 0 ? (
+            <p className="muted">Sin claves CLI registradas.</p>
+          ) : (
+            <div className="vps-list">
+              {pubkeys.map(k => (
+                <div key={k.id} className="vps-row">
+                  <div className="vps-row-main">
+                    <strong>{k.name || k.id}</strong>
+                    <span className="muted">id {k.id}</span>
+                  </div>
+                  <div className="vps-row-meta">
+                    {k.addedAt ? <span className="muted">añadida {new Date(k.addedAt).toLocaleDateString()}</span> : null}
+                    <button className="btn btn-danger" onClick={() => onRemovePubkey(k.id, k.name)}>Revocar</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="panel">
+          <h2>Backup y restauración</h2>
+          <p className="muted">Copia cifrada de tu configuración. Guarda la passphrase: sin ella el backup no se puede restaurar.</p>
+          <form onSubmit={onCreateBackup}>
+            <label htmlFor="backup-pass">Passphrase del backup (mín. 12)</label>
+            <input id="backup-pass" type="password" value={backupPass} onInput={e => setBackupPass(e.currentTarget.value)} />
+            <div className="actions-row">
+              <button className="btn btn-primary" type="submit" disabled={backupBusy || backupPass.length < 12}>
+                {backupBusy ? 'Generando…' : 'Descargar backup'}
+              </button>
+            </div>
+          </form>
+          <hr className="sep" />
+          <form onSubmit={onRestoreBackup}>
+            <label htmlFor="restore-file">Archivo de backup (.bak)</label>
+            <input id="restore-file" type="file" accept=".bak" onChange={e => setRestoreFile(e.currentTarget.files?.[0] || null)} />
+            <label htmlFor="restore-pass">Passphrase del backup</label>
+            <input id="restore-pass" type="password" value={restorePass} onInput={e => setRestorePass(e.currentTarget.value)} />
+            <div className="actions-row">
+              <button className="btn btn-danger" type="submit" disabled={restoreBusy || !restoreFile}>
+                {restoreBusy ? 'Restaurando…' : 'Restaurar'}
+              </button>
+            </div>
+          </form>
         </section>
       </>
     );
@@ -370,6 +982,9 @@ export function App() {
           </div>
           <div className="actions-row">
             <button className="btn" onClick={addServiceRow}>Anadir servicio</button>
+            <button className="btn" onClick={onRefreshHealth} disabled={healthBusy}>
+              {healthBusy ? 'Comprobando…' : 'Refrescar estado'}
+            </button>
           </div>
         </section>
         <div className="actions-row">
@@ -430,6 +1045,66 @@ export function App() {
     );
   }
 
+  function renderLogin() {
+    const firstRun = !authStatus.hasPassword;
+    return (
+      <main className="shell">
+        <header className="hero">
+          <div>
+            <h1>Umbrel Tunnel</h1>
+            <p className="muted">Canal seguro para infraestructura soberana.</p>
+          </div>
+        </header>
+        <div aria-live="polite" role="status">
+          {message.text ? <div className={`alert ${message.kind === 'error' ? 'alert-error' : 'alert-success'}`}>{message.text}</div> : null}
+        </div>
+        <section className="panel">
+          <h2>{firstRun ? 'Crea una contraseña' : 'Iniciar sesión'}</h2>
+          <form onSubmit={firstRun ? onSetInitialPassword : onLogin}>
+            <label htmlFor="login-password">Contraseña</label>
+            <input
+              id="login-password"
+              type="password"
+              autoComplete={firstRun ? 'new-password' : 'current-password'}
+              value={loginPassword}
+              onInput={e => setLoginPassword(e.currentTarget.value)}
+            />
+            {firstRun ? (
+              <>
+                <label htmlFor="login-confirm">Repite la contraseña</label>
+                <input
+                  id="login-confirm"
+                  type="password"
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onInput={e => setConfirmPassword(e.currentTarget.value)}
+                />
+                <p className="muted">Mínimo 8 caracteres. Será necesaria para acceder al panel.</p>
+              </>
+            ) : null}
+            <div className="actions-row">
+              <button className="btn btn-primary" type="submit" disabled={loading || !loginPassword}>
+                {loading ? 'Procesando…' : (firstRun ? 'Crear y entrar' : 'Entrar')}
+              </button>
+            </div>
+          </form>
+        </section>
+      </main>
+    );
+  }
+
+  if (gate === 'loading') {
+    return (
+      <main className="shell">
+        <div className="muted">Cargando…</div>
+      </main>
+    );
+  }
+
+  if (gate === 'login') {
+    return renderLogin();
+  }
+
   let content = renderDashboard();
   if (tab === 'config') content = renderConfig();
   if (tab === 'optional') content = renderOptionalConfig();
@@ -443,16 +1118,23 @@ export function App() {
           <h1>Umbrel Tunnel</h1>
           <p className="muted">Canal seguro para infraestructura soberana.</p>
         </div>
-        <div className={`status-badge ${statusBadge.cls}`}>
-          <span className="dot" />
-          <span>{statusBadge.text}</span>
+        <div className="hero-right">
+          <div className={`status-badge ${statusBadge.cls}`}>
+            <span className="dot" />
+            <span>{statusBadge.text}</span>
+          </div>
+          {authStatus.authenticated ? (
+            <button className="btn btn-logout" onClick={onLogout}>Salir</button>
+          ) : null}
         </div>
       </header>
 
-      <nav className="tabbar">
+      <nav className="tabbar" role="tablist" aria-label="Secciones">
         {TAB_ITEMS.map(item => (
           <button
             key={item.key}
+            role="tab"
+            aria-selected={tab === item.key}
             className={`tab ${tab === item.key ? 'active' : ''}`}
             onClick={() => setTab(item.key)}
           >
@@ -461,7 +1143,9 @@ export function App() {
         ))}
       </nav>
 
-      {message.text ? <div className={`alert ${message.kind === 'error' ? 'alert-error' : 'alert-success'}`}>{message.text}</div> : null}
+      <div aria-live="polite" role="status">
+        {message.text ? <div className={`alert ${message.kind === 'error' ? 'alert-error' : 'alert-success'}`}>{message.text}</div> : null}
+      </div>
       {loading ? <div className="muted">Cargando...</div> : null}
       {content}
     </main>

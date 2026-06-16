@@ -8,5 +8,11 @@ export default defineConfig({
   build: {
     outDir: resolve(__dirname, '../public/app'),
     emptyOutDir: true
+  },
+  // Solo en `npm run dev`: redirige las llamadas /api al backend local (server.js).
+  server: {
+    proxy: {
+      '/api': 'http://localhost:3016'
+    }
   }
 });

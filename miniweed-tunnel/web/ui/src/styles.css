@@ -430,6 +430,73 @@ label {
   margin-bottom: 8px;
 }
 
+.vps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.vps-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid rgba(127, 142, 133, 0.2);
+  border-radius: 10px;
+}
+
+.vps-row.active {
+  border-color: rgba(120, 190, 150, 0.5);
+  background: rgba(40, 64, 50, 0.35);
+}
+
+.vps-row-main,
+.vps-row-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 560px) {
+  .vps-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+.hero-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.btn-logout {
+  white-space: nowrap;
+}
+
+.rotate-box {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid rgba(127, 142, 133, 0.25);
+  border-radius: 10px;
+  background: rgba(40, 48, 44, 0.25);
+}
+
+.rotate-box h3 {
+  margin: 0 0 6px;
+  font-size: 1rem;
+}
+
+.sep {
+  border: none;
+  border-top: 1px dashed rgba(127, 142, 133, 0.25);
+  margin: 16px 0;
+}
+
 .text-error {
   color: var(--danger);
 }
