@@ -22,7 +22,6 @@ services:
       - DATA_DIR=/data
       - WG_API_HOST=wg
       - WG_API_TOKEN=${APP_SEED}
-      - DISABLE_API_AUTH=true
       - PORT=3016
       - APP_SEED=${APP_SEED}
 

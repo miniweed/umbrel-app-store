@@ -15,7 +15,9 @@ website: https://github.com/miniweed/umbrel-app-store
 repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
-releaseNotes: ""
+releaseNotes: >-
+  Autenticación Umbrel habilitada (PROXY_AUTH_ADD). Preparación para login
+  propio en próxima versión.
 dependencies: []
 path: ""
 defaultUsername: ""
