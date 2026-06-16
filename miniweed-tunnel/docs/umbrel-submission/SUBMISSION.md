@@ -15,9 +15,13 @@ official store starts at **1.0.0**.
 - [x] Manifest (`umbrel-app.yml`) with `version: "1.0.0"`, `gallery: []`, `releaseNotes: ""`, `submitter`
 - [x] `docker-compose.yml` with all images pinned by digest
 - [x] App tested end-to-end on real umbrelOS (tunnel + HTTPS working)
-- [ ] **Icon**: 256×256 SVG, no rounded corners — `../../icon.svg` (host on svgur/imgur to attach)
-- [ ] **Gallery**: 3–5 screenshots at **1440×900 PNG** (USER to provide) — or simple
-      screenshots for the Umbrel team to design the final gallery
+- [x] **Icon**: 256×256 SVG (no rounded corners) — `icon-256.svg` (+ `icon-256.png`)
+- [~] **Gallery**: designed 1440×900 source images in `gallery/*.svg`
+      (`01-hero`, `02-how-it-works`, `03-features`). Export each to **1440×900 PNG**
+      before attaching — open the SVG in a browser and screenshot, or use a proper
+      SVG→PNG tool (`rsvg-convert -w 1440 -h 900`, Inkscape, or resvg). Real
+      screenshots of the running app can be added too; Umbrel can also design the
+      final gallery from these.
 - [ ] Optional: push a `umbrel-tunnel-web:1.0.0` image tag for the digest (the digest
       itself already pins content; tag is cosmetic)
 
@@ -71,5 +75,5 @@ Testing checklist (fill the platform you tested):
 
 Links:
 - Source repo: https://github.com/miniweed/umbrel-app-store
-- Icon: <svgur/imgur link to icon.svg>
+- Icon: upload `icon-256.svg` (host on svgur/imgur and paste the link)
 - Gallery: <attach 3–5 screenshots>
