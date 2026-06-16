@@ -30,7 +30,6 @@ const {
   generateWgConf,
   generateCaddyfile,
   generateVpsScript,
-  buildKillSwitchScript,
   buildVpsRotateScript
 } = require('./lib/generators');
 const { seal, open, isSealed } = require('./lib/cryptobox');
@@ -751,17 +750,6 @@ app.get('/api/openapi.json', (req, res) => {
   res.json(openApiDoc);
 });
 
-app.get('/api/kill-switch/script', (req, res) => {
-  const script = buildKillSwitchScript();
-  const sha256 = crypto.createHash('sha256').update(script).digest('hex');
-  if (req.query.format === 'plain') {
-    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    res.setHeader('Content-Disposition', 'attachment; filename="miniweed-killswitch.sh"');
-    return res.send(script);
-  }
-  return res.json({ script, sha256, filename: 'miniweed-killswitch.sh' });
-});
-
 app.post('/api/rotate/prepare', validateBody(RotatePrepareSchema), async (req, res) => {
   const cfg = loadConfig();
   const active = getActiveVpsTarget(cfg);
@@ -931,7 +919,6 @@ module.exports = {
     generateVpsScript,
     generateWgConf,
     generateCaddyfile,
-    buildKillSwitchScript,
     buildVpsRotateScript,
     checkServicesHealth,
     validateEmailWithMx,

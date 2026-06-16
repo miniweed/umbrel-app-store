@@ -128,10 +128,3 @@ export function rotateConfirm(planId, apply) {
     body: JSON.stringify({ planId, apply })
   });
 }
-
-// ── kill-switch ─────────────────────────────────────────────────────────────
-
-/** @returns {Promise<{ script: string, sha256: string, filename: string }>} */
-export function getKillSwitchScript() {
-  return getJson(`/api/kill-switch/script?_ts=${Date.now()}`);
-}

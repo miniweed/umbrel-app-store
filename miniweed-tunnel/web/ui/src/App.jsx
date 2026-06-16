@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import {
   getConfig,
-  getKillSwitchScript,
   getStatus,
   getVpsSetupScript,
   keygen,
@@ -13,10 +12,10 @@ import {
 
 const TAB_ITEMS = [
   { key: 'dashboard', label: 'Dashboard' },
-  { key: 'services', label: 'Services' },
+  { key: 'instructions', label: 'Instructions' },
   { key: 'config', label: 'Configuration' },
   { key: 'vps', label: 'VPS Setup' },
-  { key: 'advanced', label: 'Advanced' }
+  { key: 'services', label: 'Services' }
 ];
 
 const EMPTY_SERVICE = { name: '', subdomain: '', target: '', enabled: true };
@@ -67,8 +66,6 @@ export function App() {
   const [healthBusy, setHealthBusy] = useState(false);
   const [rotation, setRotation] = useState(null);
   const [rotationBusy, setRotationBusy] = useState(false);
-  const [killSwitch, setKillSwitch] = useState(null);
-  const [killSwitchBusy, setKillSwitchBusy] = useState(false);
 
   const setupIncomplete = !cfg.publicKey || !cfg.vpsPubKey || !cfg.vpsIp;
   const scriptMissingPublicKey = !cfg.publicKey;
@@ -162,18 +159,6 @@ export function App() {
       setMessage({ text: err.message || 'Could not complete the rotation.', kind: 'error' });
     } finally {
       setRotationBusy(false);
-    }
-  }
-
-  async function onLoadKillSwitch() {
-    setKillSwitchBusy(true);
-    setMessage({ text: '', kind: '' });
-    try {
-      setKillSwitch(await getKillSwitchScript());
-    } catch (err) {
-      setMessage({ text: err.message || 'Could not generate the kill-switch.', kind: 'error' });
-    } finally {
-      setKillSwitchBusy(false);
     }
   }
 
@@ -463,31 +448,53 @@ export function App() {
     );
   }
 
-  function renderAdvanced() {
+  function renderInstructions() {
     return (
       <>
         <section className="panel">
-          <h2>Emergency kill-switch</h2>
+          <h2>Before you start</h2>
+          <ol className="steps">
+            <li>
+              <strong>Rent a VPS</strong> (Debian/Ubuntu) from any provider. Note its public
+              IP and, in the provider's firewall panel, open <code>TCP 80</code>,
+              <code>TCP 443</code> and <code>UDP 51820</code>.
+            </li>
+            <li>
+              <strong>Point your domain's DNS</strong> to the VPS IP: an <code>A</code> record
+              for <code>@</code>, one for <code>www</code>, and a wildcard <code>*</code> record
+              (so every <code>service.yourdomain.com</code> resolves to the VPS).
+            </li>
+          </ol>
+        </section>
+
+        <section className="panel">
+          <h2>Set up the tunnel</h2>
+          <ol className="steps">
+            <li>In <strong>Configuration</strong>, click <em>Generate keys</em>.</li>
+            <li>In <strong>Configuration</strong>, enter the <em>VPS public IP</em> and the
+              WireGuard <em>port</em>.</li>
+            <li>In <strong>Configuration</strong>, enter your <em>domain</em> and
+              <em>Let's Encrypt email</em>, then <em>Save</em>.</li>
+            <li>In <strong>VPS Setup</strong>, copy or download the script and run it as
+              <strong>root</strong> on the VPS. Verify the <em>SHA-256</em>. It sets up the
+              tunnel and hardens the server.</li>
+            <li>Paste the <em>VPS public key</em> printed by the script back into
+              <strong>Configuration</strong> and <em>Save</em>.</li>
+            <li>In <strong>Services</strong>, add each service (subdomain + internal URL)
+              and <em>Save</em>.</li>
+            <li>Open <code>https://&lt;subdomain&gt;.yourdomain.com</code> — it should load over
+              HTTPS (the certificate is issued automatically on first request).</li>
+          </ol>
           <p className="muted">
-            Script to stop WireGuard and block the UDP port on the VPS if you need to cut the
-            tunnel immediately. Run it as root on the VPS.
+            Full guide with details:{' '}
+            <a
+              href="https://github.com/miniweed/umbrel-app-store/blob/main/miniweed-tunnel/README.md"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              README on GitHub
+            </a>.
           </p>
-          <div className="actions-row">
-            <button className="btn" onClick={onLoadKillSwitch} disabled={killSwitchBusy}>
-              {killSwitchBusy ? 'Generating…' : 'Generate kill-switch'}
-            </button>
-            {killSwitch ? (
-              <button className="btn" onClick={() => downloadText(killSwitch.filename || 'miniweed-killswitch.sh', killSwitch.script)}>
-                Download .sh
-              </button>
-            ) : null}
-          </div>
-          {killSwitch ? (
-            <>
-              <pre className="code-box">{killSwitch.script}</pre>
-              <p className="muted">SHA-256: <code>{killSwitch.sha256 || '-'}</code></p>
-            </>
-          ) : null}
         </section>
       </>
     );
@@ -583,8 +590,8 @@ export function App() {
   }
 
   let content = renderDashboard();
+  if (tab === 'instructions') content = renderInstructions();
   if (tab === 'config') content = renderConfig();
-  if (tab === 'advanced') content = renderAdvanced();
   if (tab === 'services') content = renderServices();
   if (tab === 'vps') content = renderVps();
 

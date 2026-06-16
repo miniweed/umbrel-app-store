@@ -304,29 +304,6 @@ echo " Paste this key into Umbrel Tunnel and you are done."
 `;
 }
 
-function buildKillSwitchScript() {
-  return `#!/usr/bin/env bash
-set -euo pipefail
-
-if [ "$(id -u)" -ne 0 ]; then
-  echo "[killswitch] must run as root"
-  exit 1
-fi
-
-WG_PORT="\${WG_PORT:-51820}"
-STATUS_FILE="\${STATUS_FILE:-/var/run/miniweed.status}"
-
-echo "[killswitch] stopping wg0"
-systemctl stop wg-quick@wg0 || true
-
-echo "[killswitch] blocking udp/\${WG_PORT}"
-iptables -w -C INPUT -p udp --dport "$WG_PORT" -j DROP 2>/dev/null || iptables -w -A INPUT -p udp --dport "$WG_PORT" -j DROP
-
-echo "killed at $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$STATUS_FILE"
-echo "[killswitch] completed"
-`;
-}
-
 function buildVpsRotateScript(cfg, next, target) {
   const selected = target;
   if (!selected) throw new Error('No active VPS for rotation');
@@ -399,6 +376,5 @@ module.exports = {
   generateWgConf,
   generateCaddyfile,
   generateVpsScript,
-  buildKillSwitchScript,
   buildVpsRotateScript
 };

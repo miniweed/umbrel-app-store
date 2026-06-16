@@ -16,7 +16,7 @@ to the chosen internal service. The home router never opens a port.
   and `no-new-privileges`.
 - The VPS setup script is generated server-side, prints a **SHA-256** to verify
   before running, hardens SSH with lockout protection, configures a restrictive
-  firewall with a rollback, and ships an emergency kill-switch.
+  firewall with a rollback.
 - Secrets (WireGuard keys) are **encrypted at rest**; the audit log is a
   tamper-evident hash chain. Access to the panel is protected by Umbrel's
   authenticated app proxy (`PROXY_AUTH_ADD: true`).

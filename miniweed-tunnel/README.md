@@ -75,8 +75,8 @@ over HTTPS (the certificate is issued automatically on first request).
 - **Automatic HTTPS** for each exposed service via Caddy + Let's Encrypt.
 - **Per-service health checks** shown in the dashboard.
 - **Secure key rotation** — rotate WireGuard keys without breaking the tunnel.
-- **Emergency kill-switch** — one script to stop the tunnel and block the port.
 - **Optional CrowdSec** hardening on the VPS.
+- **In-app instructions** tab guiding you through the whole setup.
 
 Access to the panel is protected by your Umbrel account (the app runs behind
 Umbrel's authenticated app proxy).

@@ -59,10 +59,10 @@ Security note for reviewers:
 - Inbound traffic enters via the user's VPS and travels an encrypted WireGuard
   tunnel; the home router never opens a port.
 - The `wg` container needs `NET_ADMIN` + `SYS_MODULE` for WireGuard (same as the
-  official Tailscale app). The `web` container runs non-root with `cap_drop: ALL`.
+  official Tailscale app). The `web` container uses `cap_drop: ALL` + `no-new-privileges`.
 - The VPS setup script is generated server-side, shows a SHA-256 to verify, hardens
-  SSH with lockout protection, sets a restrictive firewall with rollback, and ships
-  a kill-switch. Secrets are encrypted at rest; the audit log is a hash chain.
+  SSH with lockout protection, and sets a restrictive firewall with rollback.
+  Secrets are encrypted at rest; the audit log is a hash chain.
 - Panel access is protected by Umbrel's authenticated app proxy (PROXY_AUTH_ADD: true).
 
 Testing checklist (fill the platform you tested):
