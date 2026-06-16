@@ -27,8 +27,8 @@ Create the folder `miniweed-tunnel/` in a fork of `getumbrel/umbrel-apps` with:
 - `umbrel-app.yml`  → use `./umbrel-app.yml` from this folder
 - `docker-compose.yml` → use `./docker-compose.yml` from this folder
 
-Web image digest (multi-arch, current :1.6.35 — re-verify before submitting):
-`sha256:b8f749cf5a00709db6912f54ecf8905d3e93ad73115d0481507cd4773d36b96e`
+Web image digest (multi-arch, current :1.6.37 — re-verify before submitting):
+`sha256:f13f4805664ebb945784049374a2c9be82660a0db6be91f38f57c40c3eadc1a9`
 
 ## Steps to open the PR (when ready)
 
@@ -63,7 +63,7 @@ Security note for reviewers:
 - The VPS setup script is generated server-side, shows a SHA-256 to verify, hardens
   SSH with lockout protection, sets a restrictive firewall with rollback, and ships
   a kill-switch. Secrets are encrypted at rest; the audit log is a hash chain.
-- The app has its own login (password + sessions) on top of Umbrel's app proxy.
+- Panel access is protected by Umbrel's authenticated app proxy (PROXY_AUTH_ADD: true).
 
 Testing checklist (fill the platform you tested):
 - [x] Installed and ran on umbrelOS (state persists across app restart)
