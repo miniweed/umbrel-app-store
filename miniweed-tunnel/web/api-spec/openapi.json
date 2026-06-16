@@ -820,6 +820,50 @@
         }
       }
     },
+    "/api/vps/targets": {
+      "get": {
+        "summary": "List VPS targets with health and active target",
+        "responses": {
+          "200": {
+            "description": "VPS targets and current active target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VpsTargetsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vps/failover": {
+      "post": {
+        "summary": "Trigger automatic failover or force specific target",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VpsFailoverRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Failover result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VpsFailoverResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/vps-setup-script": {
       "get": {
         "summary": "Generate setup script for current VPS target",

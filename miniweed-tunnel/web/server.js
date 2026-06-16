@@ -10,7 +10,9 @@ const dns = require('dns');
 const {
   ConfigSchema,
   RotatePrepareSchema,
-  RotateConfirmSchema
+  RotateConfirmSchema,
+  AuthPasswordSchema,
+  AuthLoginSchema
 } = require('./api-spec/schemas');
 const { seal, open, isSealed } = require('./lib/cryptobox');
 const audit = require('./lib/audit');
@@ -319,6 +321,29 @@ function apiRateLimit(req, res, next) {
 }
 
 function requireApiAuth(req, res, next) {
+  if (DISABLE_API_AUTH) return next();
+  const publicPaths = [
+    '/auth/login', '/api/auth/login',
+    '/auth/challenge', '/api/auth/challenge',
+    '/auth/verify', '/api/auth/verify',
+    '/auth/password', '/api/auth/password',
+    '/auth/status', '/api/auth/status'
+  ];
+  if (publicPaths.includes(req.path)) return next();
+  const headerToken = req.get('x-tunnel-api-token') || '';
+  const cookies = parseCookies(req);
+  const sessionToken = cookies[SESSION_COOKIE] || '';
+  const expected = Buffer.from(String(API_AUTH_TOKEN).padEnd(128).slice(0, 128));
+  const headerOk = crypto.timingSafeEqual(Buffer.from(String(headerToken).padEnd(128).slice(0, 128)), expected);
+  const cfg = loadConfig();
+  const now = Date.now();
+  const sessions = Array.isArray(cfg.auth?.sessions) ? cfg.auth.sessions : [];
+  const sessionOk = Boolean(sessionToken && sessions.some(s => s.id === sessionToken && s.expiresAt > now));
+
+  if (!headerOk && !sessionOk) {
+    audit.log({ action: 'auth.fail', ip: req.ip, path: req.path });
+    return res.status(401).json({ error: 'No autorizado' });
+  }
   return next();
 }
 
@@ -1597,6 +1622,271 @@ app.post('/api/config', async (req, res) => {
 });
 
 
+// ── auth endpoints ───────────────────────────────────────────────────────────
+
+app.get('/api/auth/status', (req, res) => {
+  const cfg = loadConfig();
+  const hasPassword = Boolean(cfg.auth?.passwordHash);
+  const cookies = parseCookies(req);
+  const sessionToken = cookies[SESSION_COOKIE] || '';
+  const now = Date.now();
+  const sessions = Array.isArray(cfg.auth?.sessions) ? cfg.auth.sessions : [];
+  const authenticated = Boolean(sessionToken && sessions.some(s => s.id === sessionToken && s.expiresAt > now));
+  return res.json({ hasPassword, authenticated });
+});
+
+app.post('/api/auth/password', validateBody(AuthPasswordSchema), async (req, res) => {
+  const password = String(req.body?.password || '');
+  await withConfigLock(async () => {
+    const cfg = loadConfig();
+    cfg.auth = cfg.auth || {};
+    cfg.auth.passwordHash = hashPassword(password);
+    cfg.auth.sessions = [];
+    saveConfig(cfg);
+  });
+  audit.log({ action: 'auth.password.set', ip: req.ip });
+  return res.json({ ok: true });
+});
+
+app.post('/api/auth/login', validateBody(AuthLoginSchema), async (req, res) => {
+  const password = String(req.body?.password || '');
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+
+  const cfg = loadConfig();
+  const hash = cfg.auth?.passwordHash || '';
+  if (!hash) return res.status(400).json({ error: 'password no configurada' });
+
+  const ok = verifyPassword(password, hash);
+  if (!ok) {
+    const delay = authFailureDelayMs(ip);
+    await new Promise(resolve => setTimeout(resolve, delay));
+    audit.log({ action: 'auth.fail', ip, path: '/api/auth/login' });
+    return res.status(401).json({ error: 'credenciales inválidas' });
+  }
+
+  clearAuthFailures(ip);
+  const now = Date.now();
+  const session = createSession(ip, 'web-password');
+  await withConfigLock(async () => {
+    const current = loadConfig();
+    current.auth = current.auth || {};
+    const sessions = Array.isArray(current.auth.sessions) ? current.auth.sessions : [];
+    current.auth.sessions = sessions
+      .filter(s => s.expiresAt > now)
+      .concat([session]);
+    saveConfig(current);
+  });
+
+  const secureAttr = req.secure || req.get('x-forwarded-proto') === 'https' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${encodeURIComponent(session.id)}; Path=/; HttpOnly; SameSite=Strict${secureAttr}; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`);
+  audit.log({ action: 'auth.success', ip, path: '/api/auth/login' });
+  return res.json({ ok: true });
+});
+
+app.get('/api/auth/sessions', (req, res) => {
+  const cfg = loadConfig();
+  const now = Date.now();
+  const sessions = Array.isArray(cfg.auth?.sessions) ? cfg.auth.sessions.filter(s => s.expiresAt > now) : [];
+  const cookies = parseCookies(req);
+  const currentSessionId = cookies[SESSION_COOKIE] || '';
+  return res.json({
+    sessions: sessions.map(s => ({
+      id: s.id,
+      createdAt: s.createdAt,
+      expiresAt: s.expiresAt,
+      ip: s.ip,
+      source: s.source || 'unknown',
+      current: s.id === currentSessionId
+    }))
+  });
+});
+
+app.delete('/api/auth/sessions/:id', async (req, res) => {
+  const sessionId = String(req.params.id || '').trim();
+  if (!sessionId) return res.status(400).json({ error: 'session id requerida' });
+  const now = Date.now();
+  await withConfigLock(async () => {
+    const cfg = loadConfig();
+    cfg.auth = cfg.auth || {};
+    const sessions = Array.isArray(cfg.auth.sessions) ? cfg.auth.sessions : [];
+    cfg.auth.sessions = sessions.filter(s => s.expiresAt > now && s.id !== sessionId);
+    saveConfig(cfg);
+  });
+  audit.log({ action: 'auth.session.revoke', ip: req.ip || req.socket?.remoteAddress || 'unknown', sessionId });
+  return res.json({ ok: true });
+});
+
+app.post('/api/auth/pubkeys', async (req, res) => {
+  const name = String(req.body?.name || '').trim();
+  const inputKey = String(req.body?.publicKey || '').trim();
+  if (!name || !inputKey) return res.status(400).json({ error: 'name y publicKey requeridos' });
+  const publicKey = parseEd25519PublicKey(inputKey);
+  if (!publicKey) {
+    return res.status(400).json({ error: 'publicKey inválida (acepta base64 DER SPKI o ssh-ed25519)' });
+  }
+  const keyObject = crypto.createPublicKey({ key: Buffer.from(publicKey, 'base64'), format: 'der', type: 'spki' });
+  if (keyObject.asymmetricKeyType !== 'ed25519') {
+    return res.status(400).json({ error: 'solo se permiten claves ed25519' });
+  }
+  const keyId = crypto.createHash('sha256').update(publicKey).digest('hex').slice(0, 16);
+  await withConfigLock(async () => {
+    const cfg = loadConfig();
+    cfg.auth = cfg.auth || {};
+    const pubkeys = Array.isArray(cfg.auth.pubkeys) ? cfg.auth.pubkeys : [];
+    const next = pubkeys.filter(p => p.id !== keyId);
+    next.push({ id: keyId, name, publicKey, addedAt: Date.now() });
+    cfg.auth.pubkeys = next;
+    saveConfig(cfg);
+  });
+  audit.log({ action: 'auth.pubkey.add', ip: req.ip || req.socket?.remoteAddress || 'unknown', keyId, name });
+  return res.json({ ok: true, keyId });
+});
+
+app.get('/api/auth/pubkeys', (req, res) => {
+  const cfg = loadConfig();
+  const pubkeys = Array.isArray(cfg.auth?.pubkeys) ? cfg.auth.pubkeys : [];
+  res.json({ pubkeys: pubkeys.map(p => ({ id: p.id, name: p.name, addedAt: p.addedAt })) });
+});
+
+app.delete('/api/auth/pubkeys/:id', async (req, res) => {
+  const keyId = String(req.params.id || '').trim();
+  if (!keyId) return res.status(400).json({ error: 'key id requerida' });
+  await withConfigLock(async () => {
+    const cfg = loadConfig();
+    cfg.auth = cfg.auth || {};
+    const pubkeys = Array.isArray(cfg.auth.pubkeys) ? cfg.auth.pubkeys : [];
+    cfg.auth.pubkeys = pubkeys.filter(p => p.id !== keyId);
+    saveConfig(cfg);
+  });
+  audit.log({ action: 'auth.pubkey.remove', ip: req.ip || req.socket?.remoteAddress || 'unknown', keyId });
+  return res.json({ ok: true });
+});
+
+app.post('/api/auth/challenge', (req, res) => {
+  const keyId = String(req.body?.keyId || '').trim();
+  if (!keyId) return res.status(400).json({ error: 'keyId requerido' });
+  const cfg = loadConfig();
+  const pubkeys = Array.isArray(cfg.auth?.pubkeys) ? cfg.auth.pubkeys : [];
+  const key = pubkeys.find(p => p.id === keyId);
+  if (!key) return res.status(401).json({ error: 'clave no registrada' });
+  const challengeId = crypto.randomBytes(16).toString('hex');
+  const nonce = crypto.randomBytes(32).toString('base64');
+  const now = Date.now();
+  authChallenges.set(challengeId, {
+    keyId,
+    nonce,
+    createdAt: now,
+    expiresAt: now + CHALLENGE_TTL_MS,
+    ip: req.ip || req.socket?.remoteAddress || 'unknown'
+  });
+  return res.json({ challengeId, nonce, expiresInSec: Math.floor(CHALLENGE_TTL_MS / 1000) });
+});
+
+app.post('/api/auth/verify', async (req, res) => {
+  const challengeId = String(req.body?.challengeId || '').trim();
+  const signatureB64 = String(req.body?.signature || '').trim();
+  if (!challengeId || !signatureB64) {
+    return res.status(400).json({ error: 'challengeId y signature requeridos' });
+  }
+  const challenge = authChallenges.get(challengeId);
+  if (!challenge || challenge.expiresAt <= Date.now()) {
+    authChallenges.delete(challengeId);
+    return res.status(401).json({ error: 'challenge expirada o inválida' });
+  }
+  authChallenges.delete(challengeId);
+
+  const cfg = loadConfig();
+  const pubkeys = Array.isArray(cfg.auth?.pubkeys) ? cfg.auth.pubkeys : [];
+  const key = pubkeys.find(p => p.id === challenge.keyId);
+  if (!key) return res.status(401).json({ error: 'clave no encontrada' });
+
+  let verified = false;
+  try {
+    const publicKey = crypto.createPublicKey({ key: Buffer.from(key.publicKey, 'base64'), format: 'der', type: 'spki' });
+    verified = crypto.verify(null, Buffer.from(challenge.nonce, 'base64'), publicKey, Buffer.from(signatureB64, 'base64'));
+  } catch {
+    verified = false;
+  }
+  if (!verified) {
+    audit.log({ action: 'auth.fail', ip: req.ip || req.socket?.remoteAddress || 'unknown', path: '/api/auth/verify' });
+    return res.status(401).json({ error: 'firma inválida' });
+  }
+
+  const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+  const session = createSession(ip, `pubkey:${challenge.keyId}`);
+  await withConfigLock(async () => {
+    const current = loadConfig();
+    current.auth = current.auth || {};
+    const now = Date.now();
+    const sessions = Array.isArray(current.auth.sessions) ? current.auth.sessions : [];
+    current.auth.sessions = sessions.filter(s => s.expiresAt > now).concat([session]);
+    saveConfig(current);
+  });
+  audit.log({ action: 'auth.success', ip, path: '/api/auth/verify', keyId: challenge.keyId });
+  return res.json({ ok: true, sessionToken: session.id, expiresAt: session.expiresAt });
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  const cookies = parseCookies(req);
+  const sessionId = cookies[SESSION_COOKIE] || '';
+  const now = Date.now();
+  await withConfigLock(async () => {
+    const cfg = loadConfig();
+    cfg.auth = cfg.auth || {};
+    const sessions = Array.isArray(cfg.auth.sessions) ? cfg.auth.sessions : [];
+    cfg.auth.sessions = sessions.filter(s => s.expiresAt > now && s.id !== sessionId);
+    saveConfig(cfg);
+  });
+  const secureAttr = req.secure || req.get('x-forwarded-proto') === 'https' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict${secureAttr}; Max-Age=0`);
+  audit.log({ action: 'auth.logout', ip: req.ip || req.socket?.remoteAddress || 'unknown' });
+  return res.json({ ok: true });
+});
+
+// ── vps endpoints ────────────────────────────────────────────────────────────
+
+app.post('/api/vps/failover', async (req, res) => {
+  const requestedId = String(req.body?.targetId || '').trim();
+  const cfg = loadConfig();
+  ensureVpsTargets(cfg);
+  if (!requestedId) {
+    const result = await maybeFailover(cfg, 'manual-auto');
+    return res.json({
+      ok: true,
+      ...result,
+      activeVpsId: loadConfig().activeVpsId || '',
+      policy: result.policy || extractFailoverPolicy(cfg)
+    });
+  }
+  const target = (cfg.vpsTargets || []).find(t => t.id === requestedId && t.enabled && t.ip && t.pubKey);
+  if (!target) {
+    return res.status(404).json({ error: 'VPS objetivo no encontrado o incompleto' });
+  }
+  cfg.activeVpsId = target.id;
+  ensureVpsTargets(cfg);
+  saveConfig(cfg);
+  const wgConf = generateWgConf(cfg);
+  if (wgConf) fs.writeFileSync(WG_CONF, wgConf);
+  audit.log({ action: 'vps.failover.manual', ip: req.ip, to: target.id, toIp: target.ip });
+  return res.json({ ok: true, switched: true, next: { id: target.id, name: target.name, ip: target.ip }, activeVpsId: cfg.activeVpsId });
+});
+
+app.get('/api/vps/targets', async (req, res) => {
+  const cfg = loadConfig();
+  ensureVpsTargets(cfg);
+  const vpsHealth = await computeVpsHealth(cfg.vpsTargets || []);
+  res.json({
+    activeVpsId: cfg.activeVpsId || '',
+    targets: (cfg.vpsTargets || []).map(t => ({
+      ...t,
+      fingerprint: keyFingerprint(t.pubKey),
+      health: vpsHealth[t.id] || null
+    }))
+  });
+});
+
+// ── tunnel endpoints ─────────────────────────────────────────────────────────
+
 app.get('/api/keygen', async (req, res) => {
   try {
     const keys = await wgApi('/keygen');
@@ -2195,6 +2485,44 @@ app.get('/api/openapi.json', (req, res) => {
               content: {
                 'application/json': {
                   schema: { $ref: '#/components/schemas/KillSwitchScriptResponse' }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/vps/targets': {
+        get: {
+          summary: 'List VPS targets with health and active target',
+          responses: {
+            '200': {
+              description: 'VPS targets and current active target',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/VpsTargetsResponse' }
+                }
+              }
+            }
+          }
+        }
+      },
+      '/api/vps/failover': {
+        post: {
+          summary: 'Trigger automatic failover or force specific target',
+          requestBody: {
+            required: false,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/VpsFailoverRequest' }
+              }
+            }
+          },
+          responses: {
+            '200': {
+              description: 'Failover result',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/VpsFailoverResponse' }
                 }
               }
             }

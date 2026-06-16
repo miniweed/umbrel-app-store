@@ -82,10 +82,20 @@ const RotateConfirmSchema = z.object({
   apply: z.boolean().optional()
 });
 
+const AuthPasswordSchema = z.object({
+  password: z.string().min(8).max(128)
+});
+
+const AuthLoginSchema = z.object({
+  password: z.string().min(1).max(128)
+});
+
 module.exports = {
   ServiceSchema,
   VpsTargetSchema,
   ConfigSchema,
   RotatePrepareSchema,
-  RotateConfirmSchema
+  RotateConfirmSchema,
+  AuthPasswordSchema,
+  AuthLoginSchema
 };
