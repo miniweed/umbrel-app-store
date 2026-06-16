@@ -3,7 +3,7 @@ id: miniweed-tunnel
 name: Tunnel
 tagline: Expose your server to the world without touching your router
 category: networking
-version: "1.6.35"
+version: "1.6.36"
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.svg
 port: 3016
 description: >-
@@ -17,10 +17,9 @@ repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
 releaseNotes: >-
-  Full English UI. Fixes HTTPS access to services (TLS handshake was dropped by the
-  tunnel MTU; now uses MSS clamping and MTU 1240 in WireGuard). Includes previous
-  fixes (Caddy startup, icon) and: built-in login, failover/multi-VPS, key rotation,
-  kill-switch, encrypted backup/restore and security hardening.
+  Fixes a regression in 1.6.35 where updating asked to create the password again
+  (the web container ran as a non-root user that could not access existing data).
+  Your configuration and password are preserved. Also includes the full English UI.
 dependencies: []
 path: ""
 defaultUsername: ""

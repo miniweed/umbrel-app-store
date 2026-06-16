@@ -17,11 +17,7 @@ COPY public ./public
 COPY docker-entrypoint.sh ./
 
 RUN mkdir -p /data \
-  && chown -R node:node /app /data \
   && chmod 755 /app/docker-entrypoint.sh
-
-# Run as non-root (UID 1000 matches Umbrel's data-dir owner).
-USER node
 
 EXPOSE 3000
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

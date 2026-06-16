@@ -8,7 +8,8 @@ official store starts at **1.0.0**.
 
 - [x] All user-facing text in English (UI, backend errors, VPS script, manifest, docs)
 - [x] Multi-arch image (linux/amd64 + linux/arm64) built by CI
-- [x] Web image runs non-root (`USER node`, UID 1000)
+- [x] Web container hardened: `cap_drop: ALL` + `no-new-privileges` (runs as root
+      so it can manage its own data dir across upgrades; wg/caddy need caps anyway)
 - [x] Data persisted in volumes (`${APP_DATA_DIR}/data`)
 - [x] `app_proxy` with Umbrel auth (`PROXY_AUTH_ADD: true`)
 - [x] Manifest (`umbrel-app.yml`) with `version: "1.0.0"`, `gallery: []`, `releaseNotes: ""`, `submitter`

@@ -12,7 +12,7 @@ to the chosen internal service. The home router never opens a port.
 
 ### Notes for reviewers (security)
 - The `wg` container needs `NET_ADMIN` + `SYS_MODULE` for WireGuard (same as the
-  official Tailscale app). The `web` container runs **non-root** with `cap_drop: ALL`
+  official Tailscale app). The `web` and `caddy` containers use `cap_drop: ALL`
   and `no-new-privileges`.
 - The VPS setup script is generated server-side, prints a **SHA-256** to verify
   before running, hardens SSH with lockout protection, configures a restrictive
