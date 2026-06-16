@@ -14,7 +14,8 @@ services:
 
   web:
     # 1.6.35 build (multi-arch amd64+arm64). Digest pins the exact content.
-    image: ghcr.io/miniweed/umbrel-tunnel-web@sha256:f8dd3445634d1be62a08054159bb82799c8b38a6f9821382071eba7e5e8f6b05
+    # Re-verify this digest against the :1.6.35 tag right before submitting.
+    image: ghcr.io/miniweed/umbrel-tunnel-web@sha256:b8f749cf5a00709db6912f54ecf8905d3e93ad73115d0481507cd4773d36b96e
     restart: on-failure
     stop_grace_period: 30s
     cap_drop:
