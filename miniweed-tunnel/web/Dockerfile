@@ -1,5 +1,9 @@
 FROM node:20-alpine
 
+LABEL org.opencontainers.image.source="https://github.com/miniweed/umbrel-app-store"
+LABEL org.opencontainers.image.description="Umbrel Tunnel web UI and API"
+LABEL org.opencontainers.image.licenses="MIT"
+
 WORKDIR /app
 
 COPY package.json ./
