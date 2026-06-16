@@ -12,6 +12,9 @@ function generateWgConf(cfg, active) {
     '[Interface]',
     `Address = ${clientIp}/32`,
     `PrivateKey = ${cfg.privateKey}`,
+    // MTU reducido: evita que paquetes grandes (p. ej. la cadena de cert TLS)
+    // se descarten en el túnel detrás de enlaces con MTU < 1500.
+    'MTU = 1240',
     '',
     '[Peer]',
     `PublicKey = ${active.pubKey}`,
@@ -184,6 +187,10 @@ iptables -w -A FORWARD -p tcp -d "$WG_CLIENT_IP" --dport 80 -m conntrack --ctsta
 iptables -w -A FORWARD -p tcp -d "$WG_CLIENT_IP" --dport 443 -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
 iptables -w -A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
+# MSS clamping: imprescindible para que el handshake TLS (cadena de certificado,
+# varios KB) no se descarte en el túnel WireGuard tras un enlace con MTU < 1500.
+iptables -w -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1200
+
 iptables -w -P INPUT DROP
 iptables -w -P FORWARD DROP
 
@@ -240,6 +247,7 @@ cat > /etc/wireguard/wg0.conf <<WGEOF
 Address = ${serverIp}/24
 ListenPort = ${selected.port}
 PrivateKey = $VPS_PRIV
+MTU = 1240
 
 [Peer]
 PublicKey = ${cfg.publicKey}
@@ -348,6 +356,7 @@ cat > "$NEW_CONF_FILE" <<'WGEOF'
 Address = ${serverIp}/24
 ListenPort = ${selected.port}
 PrivateKey = __KEEP_EXISTING_VPS_PRIVATE_KEY__
+MTU = 1240
 
 [Peer]
 PublicKey = ${next.publicKey}
