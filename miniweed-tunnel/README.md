@@ -35,9 +35,9 @@ through the VPS and travels the encrypted tunnel.
 
 ### 1. Rent a VPS
 
-Get a small VPS (Debian/Ubuntu) from any provider (Hetzner, OVH, DigitalOcean,
-Vultr…). The cheapest tier is enough. Note its **public IP** and, in the
-provider's firewall/security-group panel, **open** `TCP 80`, `TCP 443` and
+Get a small VPS (Debian/Ubuntu) from any provider. The cheapest tier is enough.
+If you don't have one, take a look at **mynymbox**. Note its **public IP** and,
+in the provider's firewall/security-group panel, **open** `TCP 80`, `TCP 443` and
 `UDP 51820`.
 
 ### 2. Point your domain's DNS at the VPS
