@@ -298,23 +298,6 @@ function getActiveVpsTarget(cfg) {
   };
 }
 
-async function validateEmailWithMx(value) {
-  if (!value) return { ok: true, reason: 'empty' };
-  const match = String(value).match(/^[A-Za-z0-9._%+\-]+@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})$/);
-  if (!match) return { ok: false, reason: 'syntax' };
-  try {
-    // Timeout para que un resolver lento (o un dominio elegido por el usuario)
-    // no bloquee el guardado de config.
-    const timeout = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('mx_timeout')), 4000).unref?.());
-    const mx = await Promise.race([dns.promises.resolveMx(match[1]), timeout]);
-    if (!Array.isArray(mx) || mx.length === 0) return { ok: false, reason: 'mx_empty' };
-    return { ok: true, mxCount: mx.length };
-  } catch (err) {
-    return { ok: false, reason: 'mx_lookup_failed', code: err.code || err.message || 'unknown' };
-  }
-}
-
 
 // Envuelve handlers async para que un rechazo vaya a next(err) en vez de colgar
 // la request (Express 4 no captura rejections de funciones async por sí solo).
@@ -594,10 +577,6 @@ app.post('/api/config', async (req, res) => {
         : [];
 
       const errors = validateConfig(cfg);
-      const emailCheck = await validateEmailWithMx(cfg.acmeEmail);
-      if (!emailCheck.ok) {
-        errors.push(`The Let's Encrypt email failed MX validation (${emailCheck.reason})`);
-      }
       if (errors.length) return { errors };
 
       cfg.serviceHealth = await checkServicesHealth(cfg.services);
@@ -774,7 +753,6 @@ module.exports = {
     generateWgConf,
     generateCaddyfile,
     checkServicesHealth,
-    validateEmailWithMx,
     loadConfig,
     saveConfig
   }
