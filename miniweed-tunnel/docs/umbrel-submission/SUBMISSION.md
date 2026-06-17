@@ -16,12 +16,9 @@ official store starts at **1.0.0**.
 - [x] `docker-compose.yml` with all images pinned by digest
 - [x] App tested end-to-end on real umbrelOS (tunnel + HTTPS working)
 - [x] **Icon**: 256×256 SVG (no rounded corners) — `icon-256.svg` (+ `icon-256.png`)
-- [~] **Gallery**: designed 1440×900 source images in `gallery/*.svg`
-      (`01-hero`, `02-how-it-works`, `03-features`). Export each to **1440×900 PNG**
-      before attaching — open the SVG in a browser and screenshot, or use a proper
-      SVG→PNG tool (`rsvg-convert -w 1440 -h 900`, Inkscape, or resvg). Real
-      screenshots of the running app can be added too; Umbrel can also design the
-      final gallery from these.
+- [x] **Gallery**: 5 real screenshots at **1440×900 PNG** in `gallery/`
+      (`01-dashboard`, `02-instructions`, `03-configuration`, `04-vps-setup`,
+      `05-services`). Ready to attach to the PR.
 - [ ] Optional: push a `umbrel-tunnel-web:1.0.0` image tag for the digest (the digest
       itself already pins content; tag is cosmetic)
 
