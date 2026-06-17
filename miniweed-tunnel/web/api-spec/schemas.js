@@ -24,7 +24,9 @@ const OptionalIpv4OrEmptySchema = z.union([
 const OptionalPrivateKeyUpdateSchema = z.union([z.string().regex(WG_KEY_RE), z.literal(''), z.literal('••••')]).optional();
 const OptionalServiceNameSchema = z.union([z.string().min(1).max(64), z.literal('')]).optional();
 const OptionalSubdomainSchema = z.union([z.string().regex(/^[a-z0-9-]{1,63}$/), z.literal('')]).optional();
-const OptionalTargetSchema = z.union([z.string().regex(/^https?:\/\/[^\/\?#]+$/), z.literal('')]).optional();
+// Allow an optional trailing slash (e.g. http://host:port/); the server
+// normalizes it away with normalizeTargetUrl before saving.
+const OptionalTargetSchema = z.union([z.string().regex(/^https?:\/\/[^\/\?#]+\/?$/), z.literal('')]).optional();
 const ServiceSchema = z.object({
   name: OptionalServiceNameSchema,
   subdomain: OptionalSubdomainSchema,

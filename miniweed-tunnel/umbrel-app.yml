@@ -3,7 +3,7 @@ id: miniweed-tunnel
 name: Tunnel
 tagline: Expose your server to the world without touching your router
 category: networking
-version: "1.6.40"
+version: "1.6.41"
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.svg
 port: 3016
 description: >-
@@ -28,9 +28,8 @@ repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
 releaseNotes: >-
-  Removed in-app key rotation (it was unreliable and could break the tunnel). To
-  change keys, use Regenerate keys and re-run the VPS Setup script. Core flow
-  (keys, VPS setup, services, automatic HTTPS) and the Instructions guide remain.
+  A service URL with a trailing slash (e.g. http://IP:port/) is now accepted and
+  normalized automatically instead of being rejected.
 dependencies: []
 path: ""
 defaultUsername: ""
