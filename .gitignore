@@ -4,3 +4,4 @@ node_modules/
 *.log.gz
 Screenshot*
 .DS_Store
+local-backups/
