@@ -1,7 +1,7 @@
 manifestVersion: 1
 id: miniweed-tunnel
 name: Tunnel
-tagline: Expose your server to the world without touching your router
+tagline: Expose your services to the world without touching your router
 category: networking
 version: "1.6.41"
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.svg

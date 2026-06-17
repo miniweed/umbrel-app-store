@@ -7,7 +7,7 @@ id: miniweed-tunnel
 category: networking
 name: Tunnel
 version: "1.0.0"
-tagline: Expose your server to the world without touching your router
+tagline: Expose your services to the world without touching your router
 description: >-
   Connect your Umbrel to your own VPS and expose services to the internet without
   opening ports on your router. A 100% self-hosted alternative to Cloudflare Tunnel.
