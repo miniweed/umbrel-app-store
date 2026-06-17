@@ -13,8 +13,8 @@ services:
       PROXY_AUTH_ADD: "true"
 
   web:
-    # 1.6.43 build (multi-arch amd64+arm64). Digest pins the exact tested content.
-    image: ghcr.io/miniweed/umbrel-tunnel-web@sha256:dea2e49fffed9d03750f69e4100569992780f62d62ef3e1b70f91220c28a621d
+    # 1.6.44 build (multi-arch amd64+arm64). Digest pins the exact tested content.
+    image: ghcr.io/miniweed/umbrel-tunnel-web@sha256:587bcf53148336a71275e82883fd09a3d5f60575efbcea4d6d91a66fa68fee16
     restart: on-failure
     stop_grace_period: 30s
     cap_drop:

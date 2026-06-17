@@ -35,5 +35,6 @@ to the chosen internal service. The home router never opens a port.
 
 ### Gallery (1440×900)
 ![Instructions](https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/docs/umbrel-submission/gallery/01-instructions.png)
-![VPS Setup](https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/docs/umbrel-submission/gallery/02-vps-setup.png)
-![Services](https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/docs/umbrel-submission/gallery/03-services.png)
+![Configuration](https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/docs/umbrel-submission/gallery/02-configuration.png)
+![VPS Setup](https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/docs/umbrel-submission/gallery/03-vps-setup.png)
+![Services](https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/docs/umbrel-submission/gallery/04-services.png)
