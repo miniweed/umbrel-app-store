@@ -5,8 +5,6 @@ import {
   getVpsSetupScript,
   keygen,
   refreshHealth,
-  rotateConfirm,
-  rotatePrepare,
   saveConfig
 } from './api.js';
 
@@ -64,8 +62,6 @@ export function App() {
   const [scriptReloadMsg, setScriptReloadMsg] = useState('');
   const [scriptCopied, setScriptCopied] = useState(false);
   const [healthBusy, setHealthBusy] = useState(false);
-  const [rotation, setRotation] = useState(null);
-  const [rotationBusy, setRotationBusy] = useState(false);
 
   const setupIncomplete = !cfg.publicKey || !cfg.vpsPubKey || !cfg.vpsIp;
   const scriptMissingPublicKey = !cfg.publicKey;
@@ -124,41 +120,6 @@ export function App() {
       setMessage({ text: err.message || 'Could not refresh status.', kind: 'error' });
     } finally {
       setHealthBusy(false);
-    }
-  }
-
-  async function onRotatePrepare() {
-    if (!window.confirm(
-      'New keys and a VPS script will be generated. The tunnel does NOT change until ' +
-      'you run the script on the VPS and confirm here. Continue?'
-    )) return;
-    setRotationBusy(true);
-    setMessage({ text: '', kind: '' });
-    try {
-      const plan = await rotatePrepare();
-      setRotation(plan);
-      setMessage({ text: 'Rotation plan created. Run the script on the VPS and confirm.', kind: 'success' });
-    } catch (err) {
-      setMessage({ text: err.message || 'Could not prepare the rotation.', kind: 'error' });
-    } finally {
-      setRotationBusy(false);
-    }
-  }
-
-  async function onRotateConfirm(apply) {
-    if (!rotation?.planId) return;
-    if (apply && !window.confirm('Apply the new keys? Only confirm if you already ran the script on the VPS.')) return;
-    setRotationBusy(true);
-    setMessage({ text: '', kind: '' });
-    try {
-      await rotateConfirm(rotation.planId, apply);
-      setRotation(null);
-      if (apply) await refreshConfigOnly();
-      setMessage({ text: apply ? 'Keys rotated successfully.' : 'Rotation cancelled.', kind: 'success' });
-    } catch (err) {
-      setMessage({ text: err.message || 'Could not complete the rotation.', kind: 'error' });
-    } finally {
-      setRotationBusy(false);
     }
   }
 
@@ -367,40 +328,10 @@ export function App() {
             </button>
           </div>
           {cfg.publicKey ? (
-            <div className="rotate-box">
-              <h3>Secure key rotation</h3>
-              <p className="muted">
-                Unlike "Regenerate", rotation does not break the tunnel: it generates new keys
-                and a VPS script, and only applies them once you confirm.
-              </p>
-              {!rotation ? (
-                <div className="actions-row">
-                  <button className="btn" onClick={onRotatePrepare} disabled={rotationBusy}>
-                    {rotationBusy ? 'Preparing…' : 'Start rotation'}
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <p className="muted">
-                    New fingerprint: <code>{rotation.nextPublicKeyFingerprint || '—'}</code>
-                    {rotation.target?.ip ? ` · VPS ${rotation.target.name || rotation.target.id} (${rotation.target.ip})` : ''}
-                  </p>
-                  <ol className="steps">
-                    <li>Run this script as root on the VPS.</li>
-                    <li>When it finishes, click "Confirm and apply".</li>
-                  </ol>
-                  <pre className="code-box">{rotation.script}</pre>
-                  <p className="muted">SHA-256: <code>{rotation.scriptSha256 || '-'}</code></p>
-                  <div className="actions-row">
-                    <button className="btn" onClick={() => downloadText('miniweed-rotate.sh', rotation.script)}>Download .sh</button>
-                    <button className="btn btn-primary" onClick={() => onRotateConfirm(true)} disabled={rotationBusy}>
-                      {rotationBusy ? 'Applying…' : 'Confirm and apply'}
-                    </button>
-                    <button className="btn btn-danger" onClick={() => onRotateConfirm(false)} disabled={rotationBusy}>Cancel</button>
-                  </div>
-                </>
-              )}
-            </div>
+            <p className="muted">
+              To change keys later, click <em>Regenerate keys</em> and re-run the VPS Setup
+              script on your server.
+            </p>
           ) : null}
         </section>
 

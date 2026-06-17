@@ -304,77 +304,8 @@ echo " Paste this key into Umbrel Tunnel and you are done."
 `;
 }
 
-function buildVpsRotateScript(cfg, next, target) {
-  const selected = target;
-  if (!selected) throw new Error('No active VPS for rotation');
-  const clientIp = safeTunnelIp(cfg.tunnelClientIp, DEFAULT_CONFIG.tunnelClientIp);
-  const serverIp = safeTunnelIp(cfg.tunnelServerIp, DEFAULT_CONFIG.tunnelServerIp);
-  const pskLine = next.presharedKey ? `PresharedKey = ${next.presharedKey}` : '';
-  return `#!/usr/bin/env bash
-set -euo pipefail
-
-BACKUP="/etc/wireguard/wg0.conf.rotate-$(date +%s).bak"
-NEW_CONF_FILE="/tmp/wg0.rotate.new.conf"
-
-rollback() {
-  echo "ROTATE_FAIL: restoring $BACKUP"
-  cp "$BACKUP" /etc/wireguard/wg0.conf
-  wg-quick down wg0 2>/dev/null || true
-  wg-quick up wg0
-  exit 1
-}
-
-trap rollback ERR
-
-cp /etc/wireguard/wg0.conf "$BACKUP"
-
-cat > "$NEW_CONF_FILE" <<'WGEOF'
-[Interface]
-Address = ${serverIp}/24
-ListenPort = ${selected.port}
-PrivateKey = __KEEP_EXISTING_VPS_PRIVATE_KEY__
-MTU = 1240
-
-[Peer]
-PublicKey = ${next.publicKey}
-${pskLine}
-AllowedIPs = ${clientIp}/32
-WGEOF
-
-if grep -q '^PrivateKey' /etc/wireguard/wg0.conf; then
-  VPS_PRIV=$(awk -F' = ' '/^PrivateKey/ {print $2; exit}' /etc/wireguard/wg0.conf)
-else
-  echo "Could not read the current PrivateKey from /etc/wireguard/wg0.conf"
-  exit 1
-fi
-
-sed -i "s|__KEEP_EXISTING_VPS_PRIVATE_KEY__|$VPS_PRIV|g" "$NEW_CONF_FILE"
-cp "$NEW_CONF_FILE" /etc/wireguard/wg0.conf
-chmod 600 /etc/wireguard/wg0.conf
-
-wg-quick down wg0 || true
-wg-quick up wg0
-
-for i in $(seq 1 30); do
-  HS=$(wg show wg0 latest-handshakes | awk '{print $2}' | head -n1)
-  if [ -n "$HS" ] && [ "$HS" -gt 0 ] 2>/dev/null; then
-    NOW=$(date +%s)
-    AGE=$((NOW - HS))
-    if [ "$AGE" -lt 90 ]; then
-      echo "ROTATE_OK"
-      exit 0
-    fi
-  fi
-  sleep 1
-done
-
-rollback
-`;
-}
-
 module.exports = {
   generateWgConf,
   generateCaddyfile,
-  generateVpsScript,
-  buildVpsRotateScript
+  generateVpsScript
 };

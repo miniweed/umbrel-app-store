@@ -16,7 +16,6 @@ const HEALTH_FILE = path.join(DATA_DIR, 'health.json');
 const KNOWN_HOSTS_FILE = path.join(DATA_DIR, 'known_hosts.json');
 
 const ENCRYPTED_FIELDS = ['privateKey', 'presharedKey'];
-const ROTATION_PLAN_TTL_MS = 30 * 60 * 1000;
 
 const DEFAULT_CONFIG = {
   privateKey: '',
@@ -48,7 +47,6 @@ module.exports = {
   HEALTH_FILE,
   KNOWN_HOSTS_FILE,
   ENCRYPTED_FIELDS,
-  ROTATION_PLAN_TTL_MS,
   DEFAULT_CONFIG,
   DEFAULT_CADDYFILE
 };

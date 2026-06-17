@@ -362,46 +362,6 @@ describe('api hardening', () => {
     expect(appCsp).not.toContain("script-src 'self' 'unsafe-inline'");
   });
 
-  test('rotation prepare and commit flow works', async () => {
-    const seedPayload = JSON.stringify({
-      vpsIp: '1.2.3.4',
-      vpsPort: 51820,
-      vpsPubKey: 'A'.repeat(43) + '=',
-      domain: 'example.com',
-      acmeEmail: 'ops@example.com',
-      privateKey: 'A'.repeat(43) + '=',
-      publicKey: 'B'.repeat(43) + '=',
-      services: []
-    });
-    const saved = await req(port, 'POST', '/api/config', seedPayload, {
-      'Content-Type': 'application/json',
-      'x-tunnel-api-token': token
-    });
-    expect(saved.status).toBe(200);
-
-    const prep = await req(port, 'POST', '/api/rotate/prepare', JSON.stringify({
-      nextPrivateKey: 'C'.repeat(43) + '=',
-      nextPublicKey: 'D'.repeat(43) + '=',
-      nextPresharedKey: 'E'.repeat(43) + '='
-    }), {
-      'Content-Type': 'application/json',
-      'x-tunnel-api-token': token
-    });
-    expect(prep.status).toBe(200);
-    const prepBody = JSON.parse(prep.body);
-    expect(prepBody.planId).toBeTruthy();
-    expect(prepBody.scriptSha256).toMatch(/^[a-f0-9]{64}$/);
-
-    const confirm = await req(port, 'POST', '/api/rotate/confirm', JSON.stringify({ planId: prepBody.planId, apply: true }), {
-      'Content-Type': 'application/json',
-      'x-tunnel-api-token': token
-    });
-    expect(confirm.status).toBe(200);
-    const confirmBody = JSON.parse(confirm.body);
-    expect(confirmBody.applied).toBe(true);
-    expect(confirmBody.nextPublicKey).toBeTruthy();
-  });
-
   test('VPS script generator sanitizes invalid tunnel IPs (M4 defense in depth)', () => {
     const mod = require('../server');
     const script = mod._internals.generateVpsScript(
@@ -425,33 +385,6 @@ describe('api hardening', () => {
     const body = JSON.parse(r.body);
     expect(typeof body.ok).toBe('boolean');
     expect(typeof body.entries).toBe('number');
-  });
-
-  test('rejects rotate prepare with only one key', async () => {
-    const r = await req(port, 'POST', '/api/rotate/prepare', JSON.stringify({
-      nextPrivateKey: 'C'.repeat(43) + '='
-    }), {
-      'Content-Type': 'application/json',
-      'x-tunnel-api-token': token
-    });
-    expect(r.status).toBe(400);
-    const body = JSON.parse(r.body);
-    expect(body.error).toBe('validation');
-  });
-
-  test('openapi includes rotate and audit schemas', async () => {
-    const r = await req(port, 'GET', '/api/openapi.json', null, {
-      'x-tunnel-api-token': token
-    });
-    expect(r.status).toBe(200);
-    const body = JSON.parse(r.body);
-    expect(body.components.schemas.RotatePrepareRequest).toBeTruthy();
-    expect(body.paths['/api/rotate/{planId}']).toBeTruthy();
-    expect(body.paths['/api/audit/verify']).toBeTruthy();
-    expect(body.paths['/api/vps/failover']).toBeTruthy();
-    expect(body.paths['/api/vps/targets']).toBeTruthy();
-    expect(body.paths['/api/vps-setup-script']).toBeTruthy();
-    expect(body.components.schemas.VpsFailoverResponse).toBeTruthy();
   });
 
   test('health internals block forbidden service targets', async () => {

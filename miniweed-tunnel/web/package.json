@@ -6,13 +6,8 @@
     "test": "jest",
     "test:unit": "jest test",
     "test:integration": "jest test/api.test.js",
-    "api:spec": "node tools/generate-openapi.js",
-    "api:spec:check": "node tools/check-openapi.js",
-    "api:types": "openapi-typescript api-spec/openapi.json -o api-spec/openapi.d.ts",
-    "api:contract": "npm run api:spec && npm run api:types",
-    "api:contract:drift": "npm run api:contract && git diff --exit-code -- api-spec/openapi.json api-spec/openapi.d.ts",
     "ui:build": "npm --prefix ui run build",
-    "build": "npm run api:contract && npm run ui:build"
+    "build": "npm run ui:build"
   },
   "dependencies": {
     "express": "^4.18.2",

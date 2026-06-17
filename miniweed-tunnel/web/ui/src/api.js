@@ -1,12 +1,5 @@
 const DEFAULT_TIMEOUT_MS = 10_000;
 
-/** @typedef {import('../../api-spec/openapi').components['schemas']['VpsSetupScriptResponse']} VpsSetupScriptResponse */
-/** @typedef {import('../../api-spec/openapi').components['schemas']['ConfigResponse']} ConfigResponse */
-/** @typedef {import('../../api-spec/openapi').components['schemas']['ConfigUpdateRequest']} ConfigUpdateRequest */
-/** @typedef {import('../../api-spec/openapi').components['schemas']['ConfigUpdateResponse']} ConfigUpdateResponse */
-/** @typedef {import('../../api-spec/openapi').components['schemas']['StatusResponse']} StatusResponse */
-/** @typedef {import('../../api-spec/openapi').components['schemas']['KeygenResponse']} KeygenResponse */
-
 export async function apiFetch(pathname, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
@@ -105,26 +98,4 @@ export function getVpsSetupScript({ withCrowdsec = false } = {}) {
 /** Forces a recompute of the services' health status. */
 export function refreshHealth() {
   return requestJson('/api/health/refresh', { method: 'POST' });
-}
-
-// ── key rotation ────────────────────────────────────────────────────────────
-
-/** Prepares a rotation plan; returns the VPS script + SHA + plan. */
-export function rotatePrepare() {
-  return requestJson('/api/rotate/prepare', {
-    method: 'POST',
-    body: JSON.stringify({})
-  });
-}
-
-/**
- * Confirms (apply=true) or cancels (apply=false) a rotation plan.
- * @param {string} planId
- * @param {boolean} apply
- */
-export function rotateConfirm(planId, apply) {
-  return requestJson('/api/rotate/confirm', {
-    method: 'POST',
-    body: JSON.stringify({ planId, apply })
-  });
 }

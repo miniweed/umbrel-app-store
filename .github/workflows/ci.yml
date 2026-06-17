@@ -44,10 +44,6 @@ jobs:
         run: npm test
         working-directory: miniweed-tunnel/web
 
-      - name: Validate API contract and generated types are committed
-        run: npm run api:contract:drift
-        working-directory: miniweed-tunnel/web
-
       - name: Build SPA bundle
         run: npm ci && npm run build
         working-directory: miniweed-tunnel/web/ui

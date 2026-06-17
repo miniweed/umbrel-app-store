@@ -7,12 +7,7 @@ const net = require('net');
 const zlib = require('zlib');
 const crypto = require('crypto');
 const dns = require('dns');
-const {
-  ConfigSchema,
-  RotatePrepareSchema,
-  RotateConfirmSchema
-} = require('./api-spec/schemas');
-const openApiDoc = require('./api-spec/openapi-runtime');
+const { ConfigSchema } = require('./api-spec/schemas');
 const {
   isWireGuardKey,
   keyFingerprint,
@@ -29,8 +24,7 @@ const {
 const {
   generateWgConf,
   generateCaddyfile,
-  generateVpsScript,
-  buildVpsRotateScript
+  generateVpsScript
 } = require('./lib/generators');
 const { seal, open, isSealed } = require('./lib/cryptobox');
 const audit = require('./lib/audit');
@@ -48,16 +42,14 @@ const {
   HEALTH_FILE,
   KNOWN_HOSTS_FILE,
   ENCRYPTED_FIELDS,
-  ROTATION_PLAN_TTL_MS,
   DEFAULT_CONFIG,
   DEFAULT_CADDYFILE
 } = require('./config/constants');
 
 const app = express();
 
-// In-memory mutable state (config lock + rotation plans).
+// In-memory mutable state (config lock).
 let configLock = Promise.resolve();
-const rotationPlans = new Map();
 
 app.use(express.json({ limit: '32kb' }));
 app.disable('x-powered-by');
@@ -85,13 +77,10 @@ const rateBuckets = {
   default: { max: 120, windowMs: 60_000 },
   '/api/keygen': { max: 5, windowMs: 3_600_000, realIp: true },
   '/api/vps-setup-script': { max: 10, windowMs: 600_000 },
-  '/api/config': { max: 30, windowMs: 60_000 },
-  '/api/rotate/prepare': { max: 3, windowMs: 300_000, realIp: true },
-  '/api/rotate/confirm': { max: 5, windowMs: 300_000, realIp: true }
+  '/api/config': { max: 30, windowMs: 60_000 }
 };
 const apiRateStore = new Map();
 let rateGc = null;
-let rotationGc = null;
 let healthTimer = null;
 let runningServers = 0;
 
@@ -101,13 +90,6 @@ function withConfigLock(fn) {
   const run = configLock.then(() => fn());
   configLock = run.catch(() => {});
   return run;
-}
-
-function cleanupRotationPlans() {
-  const now = Date.now();
-  for (const [id, plan] of rotationPlans.entries()) {
-    if (!plan || plan.expiresAt <= now) rotationPlans.delete(id);
-  }
 }
 
 // Real TCP peer IP (not spoofable via X-Forwarded-For) for rate limiting.
@@ -130,20 +112,12 @@ function ensureBackgroundTimers() {
     rateGc = setInterval(cleanupApiRateStore, 60 * 1000);
     if (typeof rateGc.unref === 'function') rateGc.unref();
   }
-  if (!rotationGc) {
-    rotationGc = setInterval(cleanupRotationPlans, 60 * 1000);
-    if (typeof rotationGc.unref === 'function') rotationGc.unref();
-  }
 }
 
 function stopBackgroundTimers() {
   if (rateGc) {
     clearInterval(rateGc);
     rateGc = null;
-  }
-  if (rotationGc) {
-    clearInterval(rotationGc);
-    rotationGc = null;
   }
   if (healthTimer) {
     clearInterval(healthTimer);
@@ -343,17 +317,6 @@ async function validateEmailWithMx(value) {
 // la request (Express 4 no captura rejections de funciones async por sí solo).
 function asyncHandler(fn) {
   return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-}
-
-function validateBody(schema) {
-  return (req, res, next) => {
-    const parsed = schema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ error: 'validation', issues: parsed.error.issues });
-    }
-    req.body = parsed.data;
-    return next();
-  };
 }
 
 function serviceKey(svc) {
@@ -746,118 +709,6 @@ app.get('/api/audit/verify', (req, res) => {
   res.json(audit.verifyChain());
 });
 
-app.get('/api/openapi.json', (req, res) => {
-  res.json(openApiDoc);
-});
-
-app.post('/api/rotate/prepare', validateBody(RotatePrepareSchema), async (req, res) => {
-  const cfg = loadConfig();
-  const active = getActiveVpsTarget(cfg);
-  if (!active?.ip || !active?.pubKey || !cfg.publicKey || !cfg.privateKey) {
-    return res.status(400).json({ error: 'Incomplete configuration for rotation' });
-  }
-  try {
-    const body = req.body || {};
-    let keys = null;
-    if (body.nextPrivateKey && body.nextPublicKey) {
-      if (!isWireGuardKey(body.nextPrivateKey) || !isWireGuardKey(body.nextPublicKey)) {
-        return res.status(400).json({ error: 'invalid nextPrivateKey/nextPublicKey' });
-      }
-      if (body.nextPresharedKey && !isWireGuardKey(body.nextPresharedKey)) {
-        return res.status(400).json({ error: 'invalid nextPresharedKey' });
-      }
-      keys = {
-        privateKey: body.nextPrivateKey,
-        publicKey: body.nextPublicKey,
-        presharedKey: body.nextPresharedKey || cfg.presharedKey || ''
-      };
-    } else {
-      keys = await wgApi('/keygen');
-    }
-    const planId = crypto.randomBytes(16).toString('hex');
-    const now = Date.now();
-    const next = {
-      privateKey: keys.privateKey,
-      publicKey: keys.publicKey,
-      presharedKey: keys.presharedKey || cfg.presharedKey || ''
-    };
-    const script = buildVpsRotateScript(cfg, next, active);
-    rotationPlans.set(planId, {
-      id: planId,
-      createdAt: now,
-      expiresAt: now + ROTATION_PLAN_TTL_MS,
-      previous: {
-        privateKey: cfg.privateKey,
-        publicKey: cfg.publicKey,
-        presharedKey: cfg.presharedKey || ''
-      },
-      next,
-      script,
-      scriptSha256: crypto.createHash('sha256').update(script).digest('hex'),
-      target: { id: active.id, name: active.name, ip: active.ip }
-    });
-    audit.log({ action: 'key.rotate.prepare', ip: req.ip, planId, nextFingerprint: keyFingerprint(next.publicKey) });
-    return res.json({
-      ok: true,
-      planId,
-      expiresInSec: Math.floor(ROTATION_PLAN_TTL_MS / 1000),
-      nextPublicKey: next.publicKey,
-      nextPublicKeyFingerprint: keyFingerprint(next.publicKey),
-      script,
-      scriptSha256: crypto.createHash('sha256').update(script).digest('hex'),
-      target: { id: active.id, name: active.name, ip: active.ip }
-    });
-  } catch (err) {
-    return res.status(503).json({ error: `Could not prepare rotation: ${err.message}` });
-  }
-});
-
-app.post('/api/rotate/confirm', validateBody(RotateConfirmSchema), async (req, res) => {
-  const planId = String(req.body?.planId || '').trim();
-  const apply = req.body?.apply !== false;
-  const plan = rotationPlans.get(planId);
-  if (!plan || plan.expiresAt <= Date.now()) {
-    rotationPlans.delete(planId);
-    return res.status(404).json({ error: 'Rotation plan not found or expired' });
-  }
-
-  if (!apply) {
-    rotationPlans.delete(planId);
-    audit.log({ action: 'key.rotate.cancel', ip: req.ip, planId });
-    return res.json({ ok: true, cancelled: true });
-  }
-
-  await withConfigLock(async () => {
-    const cfg = loadConfig();
-    cfg.privateKey = plan.next.privateKey;
-    cfg.publicKey = plan.next.publicKey;
-    cfg.presharedKey = plan.next.presharedKey;
-    saveConfig(cfg);
-    const wgConf = generateWgConf(cfg, getActiveVpsTarget(cfg));
-    if (wgConf) fs.writeFileSync(WG_CONF, wgConf);
-  });
-
-  rotationPlans.delete(planId);
-  audit.log({ action: 'key.rotate.commit', ip: req.ip, planId, publicKeyFingerprint: keyFingerprint(plan.next.publicKey) });
-  return res.json({ ok: true, applied: true, nextPublicKey: plan.next.publicKey, nextPublicKeyFingerprint: keyFingerprint(plan.next.publicKey) });
-});
-
-app.get('/api/rotate/:planId', (req, res) => {
-  const plan = rotationPlans.get(req.params.planId);
-  if (!plan || plan.expiresAt <= Date.now()) {
-    if (plan) rotationPlans.delete(req.params.planId);
-    return res.status(404).json({ error: 'Plan not found or expired' });
-  }
-  return res.json({
-    id: plan.id,
-    createdAt: plan.createdAt,
-    expiresAt: plan.expiresAt,
-    nextPublicKey: plan.next.publicKey,
-    nextPublicKeyFingerprint: keyFingerprint(plan.next.publicKey),
-    scriptSha256: plan.scriptSha256
-  });
-});
-
 // ── manejo de errores ────────────────────────────────────────────────────────
 
 // Red de seguridad: cualquier throw síncrono o rechazo reenviado vía next(err)
@@ -919,7 +770,6 @@ module.exports = {
     generateVpsScript,
     generateWgConf,
     generateCaddyfile,
-    buildVpsRotateScript,
     checkServicesHealth,
     validateEmailWithMx,
     loadConfig,
