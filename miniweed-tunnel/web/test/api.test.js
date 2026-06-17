@@ -220,6 +220,30 @@ describe('api hardening', () => {
     expect(body.vps.ip).toBe('1.2.3.4');
   });
 
+  test('generates the VPS script before the VPS public key is known', async () => {
+    // The VPS public key is only obtained after running the script, so the script
+    // must be generatable with just the IP + Umbrel keys (no vpsPubKey yet).
+    const payload = JSON.stringify({
+      vpsIp: '1.2.3.4',
+      vpsPort: 51820,
+      vpsPubKey: '',
+      domain: 'example.com',
+      acmeEmail: 'ops@example.com',
+      privateKey: 'A'.repeat(43) + '=',
+      publicKey: 'B'.repeat(43) + '=',
+      services: []
+    });
+    await req(port, 'POST', '/api/config', payload, {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    const r = await req(port, 'GET', '/api/vps-setup-script', null, {
+      'x-tunnel-api-token': token
+    });
+    expect(r.status).toBe(200);
+    expect(JSON.parse(r.body).script).toContain('#!/bin/bash');
+  });
+
   test('can request setup script with crowdsec', async () => {
     const payload = JSON.stringify({
       vpsIp: '12.12.12.12',

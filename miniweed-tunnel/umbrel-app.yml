@@ -3,7 +3,7 @@ id: miniweed-tunnel
 name: Tunnel
 tagline: Expose your services to the world without touching your router
 category: networking
-version: "1.6.41"
+version: "1.6.42"
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.svg
 port: 3016
 description: >-
@@ -28,8 +28,9 @@ repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
 releaseNotes: >-
-  A service URL with a trailing slash (e.g. http://IP:port/) is now accepted and
-  normalized automatically instead of being rejected.
+  Fixes the VPS setup script not being generated: it can now be created with just
+  the VPS IP, before the VPS public key is known (regression from a recent
+  refactor). Also accepts a trailing slash in service URLs.
 dependencies: []
 path: ""
 defaultUsername: ""

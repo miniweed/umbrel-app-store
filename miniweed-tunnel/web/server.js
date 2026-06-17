@@ -282,14 +282,17 @@ function saveConfig(cfg) {
 }
 
 // Single-VPS target derived from the saved VPS fields.
+// Only the IP is required: the VPS public key isn't known until the setup script
+// has been run on the VPS, so the script must be generatable with just the IP.
+// generateWgConf checks for the pubKey itself before producing wg0.conf.
 function getActiveVpsTarget(cfg) {
-  if (!cfg.vpsIp || !cfg.vpsPubKey) return null;
+  if (!cfg.vpsIp) return null;
   return {
     id: 'primary',
     name: 'VPS',
     ip: cfg.vpsIp,
     port: cfg.vpsPort || 51820,
-    pubKey: cfg.vpsPubKey,
+    pubKey: cfg.vpsPubKey || '',
     enabled: true,
     priority: 0
   };
