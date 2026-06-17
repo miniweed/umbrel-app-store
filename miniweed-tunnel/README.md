@@ -61,7 +61,8 @@ you expose.)
    Let's Encrypt email.
 2. **VPS Setup** → copy/download the script and run it as **root** on the VPS.
    Verify the printed **SHA-256**. The script sets up the tunnel and hardens the
-   server (firewall + rollback, SSH hardening, optional CrowdSec).
+   server (firewall + rollback, SSH hardening). It is built only from your
+   distro's packages — it never downloads and runs remote code.
 3. Paste the VPS public key (printed by the script) back into **Configuration**
    and save.
 4. **Services** → add a service (subdomain + internal URL) and save.
@@ -74,8 +75,6 @@ over HTTPS (the certificate is issued automatically on first request).
 - **One-command VPS setup** with a generated, SHA-256-verifiable script.
 - **Automatic HTTPS** for each exposed service via Caddy + Let's Encrypt.
 - **Per-service health checks** shown in the dashboard.
-- **Secure key rotation** — rotate WireGuard keys without breaking the tunnel.
-- **Optional CrowdSec** hardening on the VPS.
 - **In-app instructions** tab guiding you through the whole setup.
 
 Access to the panel is protected by your Umbrel account (the app runs behind
@@ -83,15 +82,19 @@ Umbrel's authenticated app proxy).
 
 ## Security
 
+- **Trust boundaries:** on Umbrel the app is sandboxed (`web` drops all
+  capabilities; only the `wg` container needs `NET_ADMIN`/`SYS_MODULE` for
+  WireGuard, like the official Tailscale app). The root setup script runs only on
+  *your own VPS*, never on the Umbrel host.
 - WireGuard end-to-end encryption; the VPS only forwards encrypted traffic.
-- Secrets (WireGuard private/preshared keys) are encrypted at rest on the Umbrel
-  side; the audit log is a tamper-evident hash chain.
-- The generated VPS script hardens SSH (with lockout protection), sets up a
-  restrictive firewall with a rollback, and prints a SHA-256 you can verify
-  before running it.
-- Anti-SSRF checks on health probes and strict input validation on the API.
+- The generated VPS script is built **only from your distro's packages** (no remote
+  code), is deterministic, prints a SHA-256 you can verify, hardens SSH (with
+  lockout protection) and sets up a restrictive firewall with automatic rollback.
+- Secrets (WireGuard keys, service targets) are encrypted at rest (AES-256-GCM);
+  the audit log is a tamper-evident hash chain.
+- Anti-SSRF checks on reverse-proxy targets and strict input validation on the API.
 
-See [SECURITY.md](SECURITY.md) to report issues.
+See [SECURITY.md](SECURITY.md) for the full trust model and how to report issues.
 
 ## Repository layout
 

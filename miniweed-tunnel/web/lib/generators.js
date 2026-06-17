@@ -38,45 +38,13 @@ function generateCaddyfile(cfg) {
   return blocks.join('\n');
 }
 
-function generateVpsScript(cfg, target, options = {}) {
+function generateVpsScript(cfg, target) {
   const selected = target;
   if (!selected) throw new Error('No VPS selected');
   const clientIp = safeTunnelIp(cfg.tunnelClientIp, DEFAULT_CONFIG.tunnelClientIp);
   const serverIp = safeTunnelIp(cfg.tunnelServerIp, DEFAULT_CONFIG.tunnelServerIp);
-  const withCrowdsec = Boolean(options.withCrowdsec);
   const pskLine = cfg.presharedKey
     ? `PresharedKey = ${cfg.presharedKey}`
-    : '';
-  const crowdsecBlock = withCrowdsec
-    ? `
-# Optional CrowdSec
-echo "Installing CrowdSec..."
-if ! command -v curl >/dev/null 2>&1; then
-  apt-get -o DPkg::Lock::Timeout=300 install -y -qq curl ca-certificates
-fi
-if ! command -v cscli >/dev/null 2>&1; then
-  curl -fsSL https://install.crowdsec.net | sh
-fi
-apt-get -o DPkg::Lock::Timeout=300 install -y -qq crowdsec crowdsec-firewall-bouncer-iptables
-cscli collections install crowdsecurity/sshd || true
-systemctl enable crowdsec crowdsec-firewall-bouncer >/dev/null 2>&1 || true
-systemctl restart crowdsec crowdsec-firewall-bouncer >/dev/null 2>&1 || true
-for i in 1 2 3 4 5; do
-  if systemctl is-active --quiet crowdsec && systemctl is-active --quiet crowdsec-firewall-bouncer; then
-    break
-  fi
-  sleep 1
-done
-if ! systemctl is-active --quiet crowdsec; then
-  echo "Warning: crowdsec did not stay active"
-fi
-if ! systemctl is-active --quiet crowdsec-firewall-bouncer; then
-  echo "Warning: crowdsec-firewall-bouncer did not stay active"
-fi
-cscli lapi status >/dev/null 2>&1 || echo "Warning: cscli could not validate LAPI"
-cscli bouncers list >/dev/null 2>&1 || echo "Warning: cscli could not list bouncers"
-iptables-save | grep -qi crowdsec || echo "Warning: CrowdSec iptables hook not detected"
-`
     : '';
   return `#!/bin/bash
 # Umbrel Tunnel — VPS Setup
@@ -214,9 +182,8 @@ systemctl restart fail2ban >/dev/null 2>&1 || true
 # Automatic security updates
 systemctl enable unattended-upgrades >/dev/null 2>&1 || true
 systemctl restart unattended-upgrades >/dev/null 2>&1 || true
-${crowdsecBlock}
 
-# Endurecer SSH a solo clave publica (sin romper acceso)
+# Harden SSH to public-key only (without breaking access)
 SSH_HARDENED="no"
 if [ -s /root/.ssh/authorized_keys ]; then
   mkdir -p /etc/ssh/sshd_config.d

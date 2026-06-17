@@ -3,7 +3,7 @@ id: miniweed-tunnel
 name: Tunnel
 tagline: Expose your services to the world without touching your router
 category: networking
-version: "1.6.44"
+version: "1.6.45"
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.svg
 port: 3016
 description: >-
@@ -14,9 +14,9 @@ description: >-
 
 
   The app generates a one-command script that not only sets up the tunnel on your
-  VPS but also hardens it: a restrictive firewall (with rollback), SSH hardening
-  with lockout protection, and optional CrowdSec. Every script shows a SHA-256 you
-  can verify before running it.
+  VPS but also hardens it: a restrictive firewall (with rollback) and SSH hardening
+  with lockout protection. The script is built only from your distro's packages
+  (no remote code), and shows a SHA-256 you can verify before running it.
 
 
   You'll need a small VPS and a domain. Full step-by-step setup guide (renting the
@@ -28,9 +28,9 @@ repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
 releaseNotes: >-
-  Cleaner Configuration tab: required fields now use a subtle outline instead of a
-  red fill, and the domain and Let's Encrypt email are clearly marked as required
-  for HTTPS.
+  The VPS setup script is now built only from your distro's packages and never
+  downloads remote code. CrowdSec (which used a remote install script) has been
+  removed; SSH is already key-only with fail2ban and a restrictive firewall.
 dependencies: []
 path: ""
 defaultUsername: ""

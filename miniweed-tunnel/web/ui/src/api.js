@@ -84,15 +84,12 @@ export function keygen() {
 }
 
 /**
- * @param {{ withCrowdsec?: boolean }} [options]
  * @returns {Promise<VpsSetupScriptResponse>}
  */
-export function getVpsSetupScript({ withCrowdsec = false } = {}) {
+export function getVpsSetupScript() {
   const qs = new URLSearchParams();
-  if (withCrowdsec) qs.set('withCrowdsec', '1');
   qs.set('_ts', String(Date.now()));
-  const suffix = qs.toString();
-  return getJson(`/api/vps-setup-script${suffix ? `?${suffix}` : ''}`);
+  return getJson(`/api/vps-setup-script?${qs.toString()}`);
 }
 
 /** Forces a recompute of the services' health status. */

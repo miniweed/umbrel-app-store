@@ -661,22 +661,20 @@ app.get('/api/vps-setup-script', (req, res) => {
   if (!cfg.publicKey || !selected?.ip) {
     return res.status(400).json({ error: 'Configure the VPS IP and generate keys first' });
   }
-  const withCrowdsec = String(req.query.withCrowdsec || '').trim() === '1';
-  const script = generateVpsScript(cfg, selected, { withCrowdsec });
+  const script = generateVpsScript(cfg, selected);
   const sha256 = crypto.createHash('sha256').update(script).digest('hex');
   if (req.query.format === 'plain') {
-    audit.log({ action: 'script.download', format: 'plain', ip: req.ip, vpsId: selected.id, withCrowdsec });
+    audit.log({ action: 'script.download', format: 'plain', ip: req.ip, vpsId: selected.id });
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="miniweed-tunnel-vps-setup.sh"');
     return res.send(script);
   }
-  audit.log({ action: 'script.download', format: 'json', ip: req.ip, vpsId: selected.id, withCrowdsec });
+  audit.log({ action: 'script.download', format: 'json', ip: req.ip, vpsId: selected.id });
   return res.json({
     script,
     sha256,
     filename: 'miniweed-tunnel-vps-setup.sh',
-    vps: { id: selected.id, name: selected.name, ip: selected.ip, port: selected.port },
-    withCrowdsec
+    vps: { id: selected.id, name: selected.name, ip: selected.ip, port: selected.port }
   });
 });
 

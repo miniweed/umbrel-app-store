@@ -244,7 +244,7 @@ describe('api hardening', () => {
     expect(JSON.parse(r.body).script).toContain('#!/bin/bash');
   });
 
-  test('can request setup script with crowdsec', async () => {
+  test('setup script never installs remote code (no crowdsec / curl|sh)', async () => {
     const payload = JSON.stringify({
       vpsIp: '12.12.12.12',
       vpsPort: 51820,
@@ -261,17 +261,15 @@ describe('api hardening', () => {
     });
     expect(saved.status).toBe(200);
 
+    // The withCrowdsec query param is ignored now; the script must be apt-only.
     const r = await req(port, 'GET', '/api/vps-setup-script?withCrowdsec=1', null, {
       'x-tunnel-api-token': token
     });
     expect(r.status).toBe(200);
     const body = JSON.parse(r.body);
-    expect(body.withCrowdsec).toBe(true);
-    expect(body.script).toContain('Installing CrowdSec');
-    expect(body.script).toContain('apt-get -o DPkg::Lock::Timeout=300 install -y -qq curl ca-certificates');
-    expect(body.script).toContain('curl -fsSL https://install.crowdsec.net | sh');
-    expect(body.script).toContain('cscli lapi status >/dev/null 2>&1 || echo "Warning: cscli could not validate LAPI"');
-    expect(body.script).toContain('iptables-save | grep -qi crowdsec || echo "Warning: CrowdSec iptables hook not detected"');
+    expect(body.script).not.toMatch(/crowdsec/i);
+    expect(body.script).not.toContain('| sh');
+    expect(body.script).not.toContain('curl -fsSL');
     expect(body.vps.ip).toBe('12.12.12.12');
   });
 

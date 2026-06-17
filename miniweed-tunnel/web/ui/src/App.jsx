@@ -57,7 +57,6 @@ export function App() {
   const [status, setStatus] = useState({ connected: false, raw: 'Loading...' });
   const [message, setMessage] = useState({ text: '', kind: '' });
   const [loading, setLoading] = useState(false);
-  const [vpsScriptWithCrowdsec, setVpsScriptWithCrowdsec] = useState(false);
   const [scriptMeta, setScriptMeta] = useState(null);
   const [scriptReloadMsg, setScriptReloadMsg] = useState('');
   const [scriptCopied, setScriptCopied] = useState(false);
@@ -99,10 +98,9 @@ export function App() {
 
   async function loadVpsScript(source = 'auto') {
     try {
-      const data = await getVpsSetupScript({ withCrowdsec: vpsScriptWithCrowdsec });
+      const data = await getVpsSetupScript();
       setScriptMeta(data);
-      if (source === 'manual' && vpsScriptWithCrowdsec) setScriptReloadMsg('Script reloaded with CrowdSec');
-      else setScriptReloadMsg('');
+      setScriptReloadMsg(source === 'manual' ? 'Script reloaded' : '');
       setScriptCopied(false);
     } catch {
       setScriptMeta(null);
@@ -145,7 +143,7 @@ export function App() {
 
   useEffect(() => {
     if (tab === 'vps') loadVpsScript();
-  }, [tab, vpsScriptWithCrowdsec]);
+  }, [tab]);
 
   const statusBadge = useMemo(() => {
     if (status.connected) return { cls: 'connected', text: 'Connected' };
@@ -483,10 +481,6 @@ export function App() {
           <h2>VPS installation script</h2>
           <p className="muted">Run this script as root on your VPS.</p>
           <div className="actions-row">
-            <label className="check-inline">
-              <input type="checkbox" checked={vpsScriptWithCrowdsec} onChange={e => setVpsScriptWithCrowdsec(e.currentTarget.checked)} />
-              Include CrowdSec
-            </label>
             <button className="btn" onClick={() => loadVpsScript('manual')}>Reload script</button>
             {scriptReloadMsg ? <span className="script-inline-msg">{scriptReloadMsg}</span> : null}
           </div>
