@@ -3,7 +3,7 @@ id: miniweed-tunnel
 name: Tunnel
 tagline: Expose your services to the world without touching your router
 category: networking
-version: "1.6.43"
+version: "1.6.44"
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.svg
 port: 3016
 description: >-
@@ -28,8 +28,9 @@ repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
 releaseNotes: >-
-  The Let's Encrypt email is no longer MX-verified — any well-formed address is
-  accepted (the email is only used for ACME notices).
+  Cleaner Configuration tab: required fields now use a subtle outline instead of a
+  red fill, and the domain and Let's Encrypt email are clearly marked as required
+  for HTTPS.
 dependencies: []
 path: ""
 defaultUsername: ""

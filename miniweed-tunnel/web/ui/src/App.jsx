@@ -66,6 +66,8 @@ export function App() {
   const setupIncomplete = !cfg.publicKey || !cfg.vpsPubKey || !cfg.vpsIp;
   const scriptMissingPublicKey = !cfg.publicKey;
   const scriptMissingVpsIp = !(cfg.vpsIp || '').trim();
+  const missingDomain = !(cfg.domain || '').trim();
+  const missingAcmeEmail = !(cfg.acmeEmail || '').trim();
   const scriptPrereqMissing = scriptMissingPublicKey || scriptMissingVpsIp;
   const saveSuccessMsg = message.kind === 'success' && message.text.includes('Saved.') ? message.text : '';
 
@@ -360,10 +362,14 @@ export function App() {
 
         <section className="panel">
           <h2>Domain & HTTPS</h2>
-          <label>Main domain</label>
-          <input value={cfg.domain || ''} onInput={e => setField('domain', e.currentTarget.value)} placeholder="home.yourdomain.com" />
-          <label>Let's Encrypt email</label>
-          <input type="email" value={cfg.acmeEmail || ''} onInput={e => setField('acmeEmail', e.currentTarget.value)} placeholder="you@email.com" />
+          <label className={missingDomain ? 'label-required-missing' : 'label-required-ok'}>
+            Main domain (required for HTTPS)
+          </label>
+          <input className={missingDomain ? 'input-required-missing' : ''} value={cfg.domain || ''} onInput={e => setField('domain', e.currentTarget.value)} placeholder="home.yourdomain.com" />
+          <label className={missingAcmeEmail ? 'label-required-missing' : 'label-required-ok'}>
+            Let's Encrypt email (required for HTTPS)
+          </label>
+          <input className={missingAcmeEmail ? 'input-required-missing' : ''} type="email" value={cfg.acmeEmail || ''} onInput={e => setField('acmeEmail', e.currentTarget.value)} placeholder="you@email.com" />
           <p className="muted">
             DNS: point <code>@</code>, <code>www</code> and a wildcard <code>*</code> record
             to your VPS IP. The wildcard makes every <code>service.yourdomain.com</code> resolve

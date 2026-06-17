@@ -196,8 +196,7 @@ label {
 }
 
 .input-required-missing {
-  border-color: rgba(255, 109, 155, 0.82);
-  background: rgba(47, 14, 25, 0.7);
+  border-color: rgba(255, 109, 155, 0.55);
 }
 
 .actions-row {
