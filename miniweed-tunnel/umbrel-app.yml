@@ -3,7 +3,7 @@ id: miniweed-tunnel
 name: Tunnel
 tagline: Expose your services to the world without touching your router
 category: networking
-version: "1.6.45"
+version: "1.6.46"
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.svg
 port: 3016
 description: >-
@@ -28,9 +28,8 @@ repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
 releaseNotes: >-
-  The VPS setup script is now built only from your distro's packages and never
-  downloads remote code. CrowdSec (which used a remote install script) has been
-  removed; SSH is already key-only with fail2ban and a restrictive firewall.
+  The Instructions tab now points to a VPS option (mynymbox) for users who don't
+  have a server yet.
 dependencies: []
 path: ""
 defaultUsername: ""

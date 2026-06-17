@@ -390,8 +390,9 @@ export function App() {
           <h2>Before you start</h2>
           <ol className="steps">
             <li>
-              <strong>Rent a VPS</strong> (Debian/Ubuntu) from any provider. Note its public
-              IP and, in the provider's firewall panel, open <code>TCP 80</code>,
+              <strong>Rent a VPS</strong> (Debian/Ubuntu) from any provider. If you don't
+              have one, take a look at <a href="https://mynymbox.io/" target="_blank" rel="noopener noreferrer">mynymbox</a>.
+              Note its public IP and, in the provider's firewall panel, open <code>TCP 80</code>,
               <code>TCP 443</code> and <code>UDP 51820</code>.
             </li>
             <li>
