@@ -28,8 +28,8 @@ Create the folder `miniweed-tunnel/` in a fork of `getumbrel/umbrel-apps` with:
 - `umbrel-app.yml`  → use `./umbrel-app.yml` from this folder
 - `docker-compose.yml` → use `./docker-compose.yml` from this folder
 
-Web image digest (multi-arch amd64+arm64, :1.6.44 — verified public):
-`sha256:587bcf53148336a71275e82883fd09a3d5f60575efbcea4d6d91a66fa68fee16`
+Web image digest (multi-arch amd64+arm64, :1.6.45 — verified public):
+`sha256:15ce2036c6e8a2bb6295c781686025e628cce1db5954c2e614f70340f76c76b1`
 
 ## Steps to open the PR (when ready)
 
