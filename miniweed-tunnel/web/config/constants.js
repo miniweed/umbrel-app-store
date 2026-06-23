@@ -10,7 +10,7 @@ const MAX_SERVICES = 64;
 
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const WG_CONF = path.join(DATA_DIR, 'wg0.conf');
-const CADDYFILE = path.join(DATA_DIR, 'Caddyfile');
+const CADDYFILE = process.env.CADDYFILE_PATH || path.join(DATA_DIR, 'Caddyfile');
 const APP_SEED_FILE = path.join(DATA_DIR, 'app-seed');
 const HEALTH_FILE = path.join(DATA_DIR, 'health.json');
 const KNOWN_HOSTS_FILE = path.join(DATA_DIR, 'known_hosts.json');

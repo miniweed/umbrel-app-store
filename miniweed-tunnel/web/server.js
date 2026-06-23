@@ -48,8 +48,9 @@ const {
 
 const app = express();
 
-// In-memory mutable state (config lock).
+// In-memory mutable state (config lock + derived admin token).
 let configLock = Promise.resolve();
+let ADMIN_TOKEN = '';
 
 app.use(express.json({ limit: '32kb' }));
 app.disable('x-powered-by');
@@ -167,17 +168,39 @@ app.use((req, res, next) => {
 
 app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 
-app.get(['/', '/index.html'], (req, res, next) => {
+app.get(['/', '/index.html', '/app', '/app/*'], (req, res, next) => {
   const spaIndex = path.join(__dirname, 'public', 'app', 'index.html');
   if (!fs.existsSync(spaIndex)) return next();
+  if (ADMIN_TOKEN) res.setHeader('Set-Cookie', `_t=${ADMIN_TOKEN}; HttpOnly; SameSite=Strict; Path=/`);
   return res.sendFile(spaIndex);
 });
 
-app.get(['/app', '/app/*'], (req, res, next) => {
-  const spaIndex = path.join(__dirname, 'public', 'app', 'index.html');
-  if (!fs.existsSync(spaIndex)) return next();
-  return res.sendFile(spaIndex);
-});
+// ── auth ─────────────────────────────────────────────────────────────────────
+
+function parseCookies(header) {
+  const out = {};
+  if (!header) return out;
+  for (const pair of String(header).split(';')) {
+    const idx = pair.indexOf('=');
+    if (idx < 1) continue;
+    const k = pair.slice(0, idx).trim();
+    const v = pair.slice(idx + 1).trim();
+    if (k) out[k] = v;
+  }
+  return out;
+}
+
+function requireAuth(req, res, next) {
+  if (!ADMIN_TOKEN) return res.status(503).json({ error: 'Server not ready' });
+  const expected = Buffer.from(ADMIN_TOKEN);
+  const check = (raw) => {
+    if (!raw || raw.length !== ADMIN_TOKEN.length) return false;
+    try { return crypto.timingSafeEqual(Buffer.from(raw), expected); } catch { return false; }
+  };
+  if (check(req.headers['x-tunnel-api-token'])) return next();
+  if (check(parseCookies(req.headers.cookie || '')._t)) return next();
+  return res.status(401).json({ error: 'Not authenticated' });
+}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -539,7 +562,7 @@ function wgApi(urlPath) {
 
 // ── routes ───────────────────────────────────────────────────────────────────
 
-app.get('/api/config', (req, res) => {
+app.get('/api/config', requireAuth, (req, res) => {
   const cfg = loadConfig();
   // Never expose private key to the frontend
   res.json({
@@ -552,7 +575,7 @@ app.get('/api/config', (req, res) => {
   });
 });
 
-app.post('/api/config', async (req, res) => {
+app.post('/api/config', requireAuth, async (req, res) => {
   if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
     return res.status(400).json({ error: 'validation', issues: [{ path: [], message: 'body must be an object' }] });
   }
@@ -607,7 +630,7 @@ app.post('/api/config', async (req, res) => {
 
 // ── tunnel endpoints ─────────────────────────────────────────────────────────
 
-app.get('/api/keygen', async (req, res) => {
+app.get('/api/keygen', requireAuth, async (req, res) => {
   try {
     const keys = await wgApi('/keygen');
     // Save private key immediately, return only public key
@@ -640,7 +663,7 @@ app.get('/api/health', (req, res) => {
   }
 });
 
-app.post('/api/health/refresh', async (req, res) => {
+app.post('/api/health/refresh', requireAuth, async (req, res) => {
   await refreshHealthSnapshot();
   if (!fs.existsSync(HEALTH_FILE)) return res.json({ ok: false, health: {} });
   try {
@@ -652,7 +675,7 @@ app.post('/api/health/refresh', async (req, res) => {
 });
 
 
-app.get('/api/vps-setup-script', (req, res) => {
+app.get('/api/vps-setup-script', requireAuth, (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private, max-age=0');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
@@ -678,14 +701,14 @@ app.get('/api/vps-setup-script', (req, res) => {
   });
 });
 
-app.get('/api/audit', (req, res) => {
+app.get('/api/audit', requireAuth, (req, res) => {
   const limitRaw = parseInt(req.query.limit, 10);
   const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 1000) : 100;
   const entries = audit.readLatest(limit);
   res.json({ entries, total: entries.length });
 });
 
-app.get('/api/audit/verify', (req, res) => {
+app.get('/api/audit/verify', requireAuth, (req, res) => {
   res.json(audit.verifyChain());
 });
 
@@ -709,6 +732,13 @@ function startServer() {
   ensureDataDir();
   ensureBackgroundTimers();
   process.env.APP_SEED = loadOrCreateAppSeed();
+  ADMIN_TOKEN = Buffer.from(crypto.hkdfSync(
+    'sha256',
+    Buffer.from(process.env.APP_SEED, 'utf8'),
+    Buffer.from('miniweed-tunnel/v1', 'utf8'),
+    Buffer.from('tunnel-api-token-v1', 'utf8'),
+    32
+  )).toString('base64url');
   migrateConfigIfNeeded();
   refreshHealthSnapshot();
   if (!healthTimer) {
