@@ -23,7 +23,7 @@ containers on the shared Docker network can't bootstrap API access.)
 - [x] Data persisted in volumes (`${APP_DATA_DIR}/...`), bind-mount dirs committed
       with `.gitkeep`
 - [x] `app_proxy` with Umbrel auth (`PROXY_AUTH_ADD: true`)
-- [x] Manifest (`umbrel-app.yml`) with `version: "1.6.47"` (the packaged upstream
+- [x] Manifest (`umbrel-app.yml`) with `version: "1.6.48"` (the packaged upstream
       version, per review), `gallery: []`, `releaseNotes: ""`, `submitter`, `submission`
 - [x] `docker-compose.yml` with all images pinned by multi-arch digest
 - [x] App tested end-to-end on real umbrelOS (tunnel + HTTPS working)
@@ -34,14 +34,14 @@ containers on the shared Docker network can't bootstrap API access.)
 
 ## Image digests (verify against ghcr.io before re-pinning)
 
-- `ghcr.io/miniweed/umbrel-tunnel-web:1.6.47`
-  `sha256:38b00458b4d2ffba4c9bef18261caa510641cc436fa54b44bfc04599f3c43368`
+- `ghcr.io/miniweed/umbrel-tunnel-web:1.6.48`
+  `sha256:c4d6af5cf6a2316da0210d44150eeff39e1898fe600f2a296cefd7354a8d01f2`
 - `ghcr.io/miniweed/umbrel-tunnel-wg:1.0.6`
   `sha256:22fbcbc01c31ec70c623ac670f195353c5fa37525ccecb18be86d9df2ed87469`
 
-Note: pushes to `main` that touch `miniweed-tunnel/web/**` or
-`miniweed-tunnel/wg-client/**` rebuild the images and move the tags. Commit
-digest re-pins with `[skip ci]` so the freshly pinned tags don't drift.
+Note: `publish-images.yml` skips any image whose version tag already exists on
+ghcr.io, so pinned tags can't drift; publishing new content requires a version
+bump. Digest re-pin commits still use `[skip ci]` to save a no-op CI run.
 
 ## Files in the PR (`miniweed-tunnel/` in the fork)
 
