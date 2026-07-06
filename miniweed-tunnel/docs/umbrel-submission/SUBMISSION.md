@@ -1,76 +1,66 @@
 # Official Umbrel App Store submission — ready-to-go pack
 
-Everything needed to open the PR to `getumbrel/umbrel-apps`. Nothing here touches
-Umbrel's repos; it's staging. The community store keeps the 1.6.x line; the
-official store starts at **1.0.0**.
+Everything needed for the PR to `getumbrel/umbrel-apps`. Nothing here touches
+Umbrel's repos; it's staging. The official-store manifest tracks the same
+upstream version line as the community store (`1.6.x`), per review feedback.
+
+**PR:** https://github.com/getumbrel/umbrel-apps/pull/5758 (open; first review
+round by @nmfretz addressed — auth boundary, mount split, secret isolation,
+digest pinning — plus a follow-up hardening pass in `1.6.47`: the web server
+only accepts connections from the app's own `app_proxy` or loopback, so other
+containers on the shared Docker network can't bootstrap API access.)
 
 ## Status checklist
 
 - [x] All user-facing text in English (UI, backend errors, VPS script, manifest, docs)
-- [x] Multi-arch image (linux/amd64 + linux/arm64) built by CI
-- [x] Web container hardened: `cap_drop: ALL` + `no-new-privileges` (runs as root
-      so it can manage its own data dir across upgrades; wg/caddy need caps anyway)
-- [x] Data persisted in volumes (`${APP_DATA_DIR}/data`)
+- [x] Multi-arch images (linux/amd64 + linux/arm64) built by CI
+- [x] Web container hardened: `cap_drop: ALL` + `no-new-privileges`, and a
+      proxy-peer gate: only the app's `app_proxy` (Umbrel-authenticated) can
+      reach the web server; other containers get 403
+- [x] Secrets isolated: `APP_SEED` only reaches `web`; `caddy`/`wg` get a
+      derived token from `exports.sh`
+- [x] Mounts split: Caddy has no access to app data; `wg` mounts `/data` read-only
+- [x] Data persisted in volumes (`${APP_DATA_DIR}/...`), bind-mount dirs committed
+      with `.gitkeep`
 - [x] `app_proxy` with Umbrel auth (`PROXY_AUTH_ADD: true`)
-- [x] Manifest (`umbrel-app.yml`) with `version: "1.0.0"`, `gallery: []`, `releaseNotes: ""`, `submitter`
-- [x] `docker-compose.yml` with all images pinned by digest
+- [x] Manifest (`umbrel-app.yml`) with `version: "1.6.47"` (the packaged upstream
+      version, per review), `gallery: []`, `releaseNotes: ""`, `submitter`, `submission`
+- [x] `docker-compose.yml` with all images pinned by multi-arch digest
 - [x] App tested end-to-end on real umbrelOS (tunnel + HTTPS working)
 - [x] **Icon**: 256×256 SVG (no rounded corners) — `icon-256.svg` (+ `icon-256.png`)
-- [x] **Gallery**: 5 real screenshots at **1440×900 PNG** in `gallery/`
-      (`01-dashboard`, `02-instructions`, `03-configuration`, `04-vps-setup`,
-      `05-services`). Ready to attach to the PR.
-- [ ] Optional: push a `umbrel-tunnel-web:1.0.0` image tag for the digest (the digest
-      itself already pins content; tag is cosmetic)
+- [x] **Gallery**: 4 real screenshots at **1440×900 PNG** in `gallery/`
+      (`01-instructions`, `02-configuration`, `03-vps-setup`, `04-services`),
+      embedded in the PR body.
 
-## Files to copy into the PR
+## Image digests (verify against ghcr.io before re-pinning)
 
-Create the folder `miniweed-tunnel/` in a fork of `getumbrel/umbrel-apps` with:
-- `umbrel-app.yml`  → use `./umbrel-app.yml` from this folder
-- `docker-compose.yml` → use `./docker-compose.yml` from this folder
+- `ghcr.io/miniweed/umbrel-tunnel-web:1.6.47`
+  `sha256:38b00458b4d2ffba4c9bef18261caa510641cc436fa54b44bfc04599f3c43368`
+- `ghcr.io/miniweed/umbrel-tunnel-wg:1.0.6`
+  `sha256:22fbcbc01c31ec70c623ac670f195353c5fa37525ccecb18be86d9df2ed87469`
 
-Web image digest (multi-arch amd64+arm64, :1.6.46 — verified public):
-`sha256:1d7aa5c73fc6f204e66c37d392ea39bbf01f49b470a638da481e5268a650eb36`
+Note: pushes to `main` that touch `miniweed-tunnel/web/**` or
+`miniweed-tunnel/wg-client/**` rebuild the images and move the tags. Commit
+digest re-pins with `[skip ci]` so the freshly pinned tags don't drift.
 
-## Steps to open the PR (when ready)
+## Files in the PR (`miniweed-tunnel/` in the fork)
+
+- `umbrel-app.yml` → `./umbrel-app.yml` from this folder
+- `docker-compose.yml` → `./docker-compose.yml` from this folder
+- `exports.sh` → `../../exports.sh` (derives `TUNNEL_WG_TOKEN` from `APP_SEED`)
+- `data/.gitkeep`, `caddy/data/.gitkeep`, `caddy/config/.gitkeep` (bind-mount dirs)
+
+## Updating the PR branch
 
 ```bash
-gh repo fork getumbrel/umbrel-apps --clone --remote
+gh repo clone miniweed/umbrel-apps -- --branch add-miniweed-tunnel
 cd umbrel-apps
-git checkout -b add-miniweed-tunnel
-mkdir miniweed-tunnel
-cp <this-folder>/umbrel-app.yml miniweed-tunnel/umbrel-app.yml
-cp <this-folder>/docker-compose.yml miniweed-tunnel/docker-compose.yml
-git add miniweed-tunnel && git commit -m "Add Tunnel app"
-git push -u origin add-miniweed-tunnel
-gh pr create --repo getumbrel/umbrel-apps --title "Add Tunnel" --body-file <this-folder>/PR-BODY.md
+# copy the updated files listed above into miniweed-tunnel/
+git add miniweed-tunnel && git commit -m "<what changed>"
+git push origin add-miniweed-tunnel
 ```
 
-Then set `submission:` in `umbrel-app.yml` to the PR URL and push the update.
+## PR body
 
-## PR body (paste into the PR / see PR-BODY.md)
-
-Title: **Add Tunnel**
-
-Summary: Tunnel exposes a user's Umbrel services to the internet through their own
-VPS using WireGuard (E2E encryption) + Caddy (automatic HTTPS). A self-hosted
-alternative to Cloudflare Tunnel that works behind CGNAT, with no router port
-forwarding.
-
-Security note for reviewers:
-- Inbound traffic enters via the user's VPS and travels an encrypted WireGuard
-  tunnel; the home router never opens a port.
-- The `wg` container needs `NET_ADMIN` + `SYS_MODULE` for WireGuard (same as the
-  official Tailscale app). The `web` container uses `cap_drop: ALL` + `no-new-privileges`.
-- The VPS setup script is generated server-side, shows a SHA-256 to verify, hardens
-  SSH with lockout protection, and sets a restrictive firewall with rollback.
-  Secrets are encrypted at rest; the audit log is a hash chain.
-- Panel access is protected by Umbrel's authenticated app proxy (PROXY_AUTH_ADD: true).
-
-Testing checklist (fill the platform you tested):
-- [x] Installed and ran on umbrelOS (state persists across app restart)
-- [ ] Raspberry Pi / [ ] Umbrel Home / [x] Linux VM / other: ____
-
-Links:
-- Source repo: https://github.com/miniweed/umbrel-app-store
-- Icon: upload `icon-256.svg` (host on svgur/imgur and paste the link)
-- Gallery: <attach 3–5 screenshots>
+See `PR-BODY.md` (icon + the 4 gallery screenshots are embedded from this repo's
+`main` branch via raw.githubusercontent.com URLs).

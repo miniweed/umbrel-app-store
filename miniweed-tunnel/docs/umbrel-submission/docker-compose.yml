@@ -1,7 +1,7 @@
 # docker-compose.yml for the OFFICIAL Umbrel App Store submission.
-# Same as the community-store compose but the web image is pinned by its
-# multi-arch digest (required for the official store). wg and caddy are already
-# pinned. The Umbrel team may further adjust ports/digests during review.
+# Identical to the community-store compose (../../docker-compose.yml); both are
+# kept in sync. All images are pinned by their multi-arch digest.
+
 version: "3.7"
 
 services:
@@ -13,8 +13,7 @@ services:
       PROXY_AUTH_ADD: "true"
 
   web:
-    # 1.6.46 build (multi-arch amd64+arm64). Digest pins the exact tested content.
-    image: ghcr.io/miniweed/umbrel-tunnel-web:1.6.46@sha256:1d7aa5c73fc6f204e66c37d392ea39bbf01f49b470a638da481e5268a650eb36
+    image: ghcr.io/miniweed/umbrel-tunnel-web:1.6.47@sha256:38b00458b4d2ffba4c9bef18261caa510641cc436fa54b44bfc04599f3c43368
     restart: on-failure
     stop_grace_period: 30s
     cap_drop:
@@ -23,10 +22,12 @@ services:
       - no-new-privileges:true
     volumes:
       - ${APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR}/caddy/data:/caddy-data
     environment:
       - DATA_DIR=/data
+      - CADDYFILE_PATH=/caddy-data/Caddyfile
       - WG_API_HOST=wg
-      - WG_API_TOKEN=${APP_SEED}
+      - WG_API_TOKEN=${TUNNEL_WG_TOKEN}
       - PORT=3016
       - APP_SEED=${APP_SEED}
 
@@ -44,24 +45,23 @@ services:
     depends_on:
       - wg
     volumes:
-      - ${APP_DATA_DIR}/data:/data
       - ${APP_DATA_DIR}/caddy/data:/data/caddy
       - ${APP_DATA_DIR}/caddy/config:/config
     environment:
       - XDG_DATA_HOME=/data/caddy
-      - WG_API_TOKEN=${APP_SEED}
+      - WG_API_TOKEN=${TUNNEL_WG_TOKEN}
     command:
       - sh
       - -c
       - |
-        until [ -s /data/Caddyfile ] && wget -q --header="x-wg-api-token: $$WG_API_TOKEN" -O - http://127.0.0.1:8080/status >/dev/null 2>&1; do
+        until [ -s /data/caddy/Caddyfile ] && wget -q --header="x-wg-api-token: $$WG_API_TOKEN" -O - http://127.0.0.1:8080/status >/dev/null 2>&1; do
           echo "[caddy] Waiting for Caddyfile and WireGuard API..."
           sleep 2
         done
-        exec caddy run --config /data/Caddyfile --adapter caddyfile --watch
+        exec caddy run --config /data/caddy/Caddyfile --adapter caddyfile --watch
 
   wg:
-    image: ghcr.io/miniweed/umbrel-tunnel-wg:1.0.5@sha256:2cf7981d175c7e459303816e0bd3553846801b8974494a9b48c36d6638017b36
+    image: ghcr.io/miniweed/umbrel-tunnel-wg:1.0.6@sha256:22fbcbc01c31ec70c623ac670f195353c5fa37525ccecb18be86d9df2ed87469
     restart: on-failure
     stop_grace_period: 30s
     cap_drop:
@@ -74,6 +74,6 @@ services:
     sysctls:
       - net.ipv4.conf.all.src_valid_mark=1
     volumes:
-      - ${APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR}/data:/data:ro
     environment:
-      - WG_API_TOKEN=${APP_SEED}
+      - WG_API_TOKEN=${TUNNEL_WG_TOKEN}
