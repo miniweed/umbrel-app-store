@@ -392,7 +392,7 @@ export function App() {
             <li>
               <strong>Rent a VPS</strong> (Debian/Ubuntu) from any provider. If you don't
               have one, take a look at <a href="https://mynymbox.io/" target="_blank" rel="noopener noreferrer">mynymbox</a>.
-              Note its public IP and, in the provider's firewall panel, open <code>TCP 80</code>,
+              Note its public IP and, in the provider's firewall panel, open <code>TCP 80</code>,{' '}
               <code>TCP 443</code> and <code>UDP 51820</code>.
             </li>
             <li>
@@ -409,12 +409,12 @@ export function App() {
             <li>In <strong>Configuration</strong>, click <em>Generate keys</em>.</li>
             <li>In <strong>Configuration</strong>, enter the <em>VPS public IP</em> and the
               WireGuard <em>port</em>.</li>
-            <li>In <strong>Configuration</strong>, enter your <em>domain</em> and
+            <li>In <strong>Configuration</strong>, enter your <em>domain</em> and{' '}
               <em>Let's Encrypt email</em>, then <em>Save</em>.</li>
-            <li>In <strong>VPS Setup</strong>, copy or download the script and run it as
+            <li>In <strong>VPS Setup</strong>, copy or download the script and run it as{' '}
               <strong>root</strong> on the VPS. Verify the <em>SHA-256</em>. It sets up the
               tunnel and hardens the server.</li>
-            <li>Paste the <em>VPS public key</em> printed by the script back into
+            <li>Paste the <em>VPS public key</em> printed by the script back into{' '}
               <strong>Configuration</strong> and <em>Save</em>.</li>
             <li>In <strong>Services</strong>, add each service (subdomain + internal URL)
               and <em>Save</em>.</li>

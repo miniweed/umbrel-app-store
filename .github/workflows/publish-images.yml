@@ -39,13 +39,36 @@ jobs:
           echo "app_version=${APP_VERSION}" >> "$GITHUB_OUTPUT"
           echo "wg_version=${WG_VERSION}" >> "$GITHUB_OUTPUT"
 
+      # Never re-push an existing version tag: pinned digests in the store
+      # composes must not drift. Bump the version to publish new content.
+      - name: Determine which images need publishing
+        id: needs
+        run: |
+          check_tag() {
+            repo="$1"; tag="$2"
+            token=$(curl -s "https://ghcr.io/token?scope=repository:${{ github.repository_owner }}/${repo}:pull" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer $token" \
+              -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+              "https://ghcr.io/v2/${{ github.repository_owner }}/${repo}/manifests/${tag}")
+            if [ "$code" = "200" ]; then echo false; else echo true; fi
+          }
+          web=$(check_tag umbrel-tunnel-web "${{ steps.versions.outputs.app_version }}")
+          wg=$(check_tag umbrel-tunnel-wg "${{ steps.versions.outputs.wg_version }}")
+          echo "web=$web" >> "$GITHUB_OUTPUT"
+          echo "wg=$wg" >> "$GITHUB_OUTPUT"
+          echo "publish web: $web (tag ${{ steps.versions.outputs.app_version }}), wg: $wg (tag ${{ steps.versions.outputs.wg_version }})"
+
       - name: Set up QEMU
+        if: steps.needs.outputs.web == 'true' || steps.needs.outputs.wg == 'true'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
+        if: steps.needs.outputs.web == 'true' || steps.needs.outputs.wg == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Login to GHCR
+        if: steps.needs.outputs.web == 'true' || steps.needs.outputs.wg == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -53,6 +76,7 @@ jobs:
           password: ${{ secrets.CR_PAT != '' && secrets.CR_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Build and push web image
+        if: steps.needs.outputs.web == 'true'
         uses: docker/build-push-action@v6
         with:
           context: miniweed-tunnel/web
@@ -68,6 +92,7 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/umbrel-tunnel-web:main
 
       - name: Build and push wg image
+        if: steps.needs.outputs.wg == 'true'
         uses: docker/build-push-action@v6
         with:
           context: miniweed-tunnel/wg-client
