@@ -3,7 +3,7 @@ id: miniweed-tunnel
 name: Tunnel
 tagline: Expose your services to the world without touching your router
 category: networking
-version: "1.6.46"
+version: "1.6.47"
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.svg
 port: 3016
 description: >-
@@ -28,8 +28,11 @@ repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
 releaseNotes: >-
-  The Instructions tab now points to a VPS option (mynymbox) for users who don't
-  have a server yet.
+  Security hardening: the web API now only accepts connections from the app's
+  authenticated proxy, so other containers on the shared Docker network can no
+  longer reach it directly. Also: WireGuard config files are written with
+  stricter permissions, the status/health endpoints now require authentication,
+  and key generation no longer races with config saves.
 dependencies: []
 path: ""
 defaultUsername: ""

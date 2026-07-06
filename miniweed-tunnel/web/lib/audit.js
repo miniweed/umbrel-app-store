@@ -48,7 +48,10 @@ function log(event) {
 function readLatest(limit = 100) {
   if (!fs.existsSync(AUDIT_PATH)) return [];
   const lines = fs.readFileSync(AUDIT_PATH, 'utf8').trim().split('\n').filter(Boolean);
-  return lines.slice(-limit).map(line => JSON.parse(line));
+  // Una línea corrupta no debe tumbar la lectura; verifyChain ya la reporta.
+  return lines.slice(-limit).flatMap(line => {
+    try { return [JSON.parse(line)]; } catch { return []; }
+  });
 }
 
 function verifyChain() {

@@ -52,12 +52,60 @@ const app = express();
 let configLock = Promise.resolve();
 let ADMIN_TOKEN = '';
 
+// ── proxy peer gate ──────────────────────────────────────────────────────────
+// Umbrel corre todos los contenedores de apps en una red Docker compartida, así
+// que web:3016 es alcanzable por contenedores de otras apps. El único cliente
+// legítimo es el app_proxy de esta app (que impone la sesión de Umbrel vía
+// PROXY_AUTH_ADD) y loopback (procesos del propio contenedor). Cualquier otro
+// peer recibe 403 antes de tocar rutas o estáticos: nunca ve el token admin.
+const APP_PROXY_HOST = process.env.APP_PROXY_HOST || 'miniweed-tunnel_app_proxy_1';
+const PROXY_PEER_TTL_MS = 30_000;
+const PROXY_PEER_MIN_RESOLVE_GAP_MS = 1_000;
+let proxyPeers = { ips: new Set(), resolvedAt: 0 };
+
+function normalizePeerIp(addr) {
+  const ip = String(addr || '').trim().toLowerCase();
+  const mapped = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  return mapped ? mapped[1] : ip;
+}
+
+function isLoopbackPeer(ip) {
+  return ip === '::1' || ip.startsWith('127.');
+}
+
+async function resolveProxyPeers(force = false) {
+  const now = Date.now();
+  const fresh = now - proxyPeers.resolvedAt < PROXY_PEER_TTL_MS;
+  const tooSoon = now - proxyPeers.resolvedAt < PROXY_PEER_MIN_RESOLVE_GAP_MS;
+  if ((fresh && !force) || (force && tooSoon)) return proxyPeers.ips;
+  try {
+    const addrs = await dns.promises.lookup(APP_PROXY_HOST, { all: true });
+    proxyPeers = { ips: new Set(addrs.map(a => normalizePeerIp(a.address))), resolvedAt: now };
+  } catch {
+    // Fail-closed: sin resolución no se admite ningún peer nuevo.
+    proxyPeers = { ips: proxyPeers.ips, resolvedAt: now };
+  }
+  return proxyPeers.ips;
+}
+
+async function proxyPeerGate(req, res, next) {
+  const peer = normalizePeerIp(req.socket?.remoteAddress);
+  if (isLoopbackPeer(peer)) return next();
+  let allowed = await resolveProxyPeers();
+  if (!allowed.has(peer)) {
+    // El app_proxy puede haberse reiniciado con otra IP: re-resuelve antes de negar.
+    allowed = await resolveProxyPeers(true);
+  }
+  if (allowed.has(peer)) return next();
+  return res.status(403).json({ error: 'Forbidden' });
+}
+
+app.use((req, res, next) => { proxyPeerGate(req, res, next).catch(next); });
+
 app.use(express.json({ limit: '32kb' }));
 app.disable('x-powered-by');
 
-function cspHeaderForPath(pathname) {
-  return "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'";
-}
+const CSP_HEADER = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'";
 
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -68,7 +116,7 @@ app.use((req, res, next) => {
   if (isHttps) {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   }
-  res.setHeader('Content-Security-Policy', cspHeaderForPath(req.path));
+  res.setHeader('Content-Security-Policy', CSP_HEADER);
   next();
 });
 
@@ -304,6 +352,12 @@ function saveConfig(cfg) {
   fs.renameSync(tmp, CONFIG_FILE);
 }
 
+// mode solo aplica al crear el archivo; el chmod cubre archivos preexistentes.
+function writePrivateFile(file, data) {
+  fs.writeFileSync(file, data, { mode: 0o600 });
+  try { fs.chmodSync(file, 0o600); } catch {}
+}
+
 // Single-VPS target derived from the saved VPS fields.
 // Only the IP is required: the VPS public key isn't known until the setup script
 // has been run on the VPS, so the script must be generatable with just the IP.
@@ -462,8 +516,9 @@ function validateConfig(cfg) {
   if (cfg.vpsPubKey && !isWireGuardKey(cfg.vpsPubKey)) {
     errors.push('The VPS public key is invalid');
   }
-  if (cfg.vpsIp && !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(cfg.vpsIp) && !isHostname(cfg.vpsIp)) {
-    errors.push('The VPS IP/host is invalid');
+  // Misma semántica que el schema zod de entrada: solo IPv4 estricta.
+  if (cfg.vpsIp && !isValidIpv4(cfg.vpsIp)) {
+    errors.push('The VPS IP is invalid');
   }
 
   if (cfg.domain && !isHostname(cfg.domain)) errors.push('The main domain is invalid');
@@ -528,7 +583,7 @@ async function refreshHealthSnapshot() {
   try {
     const cfg = loadConfig();
     const health = await computeHealth(cfg);
-    fs.writeFileSync(HEALTH_FILE, JSON.stringify({
+    writePrivateFile(HEALTH_FILE, JSON.stringify({
       services: health
     }, null, 2));
   } catch {
@@ -613,7 +668,7 @@ app.post('/api/config', requireAuth, async (req, res) => {
       });
 
       const wgConf = generateWgConf(cfg, getActiveVpsTarget(cfg));
-      if (wgConf) fs.writeFileSync(WG_CONF, wgConf);
+      if (wgConf) writePrivateFile(WG_CONF, wgConf);
       fs.writeFileSync(CADDYFILE, generateCaddyfile(cfg));
 
       return { ok: true, serviceHealth: cfg.serviceHealth };
@@ -630,23 +685,27 @@ app.post('/api/config', requireAuth, async (req, res) => {
 
 // ── tunnel endpoints ─────────────────────────────────────────────────────────
 
-app.get('/api/keygen', requireAuth, async (req, res) => {
+app.get('/api/keygen', requireAuth, asyncHandler(async (req, res) => {
+  let keys;
   try {
-    const keys = await wgApi('/keygen');
-    // Save private key immediately, return only public key
+    keys = await wgApi('/keygen');
+  } catch (err) {
+    return res.status(503).json({ error: 'WireGuard unavailable: ' + err.message });
+  }
+  // Save private key immediately, return only public key. Bajo el lock para no
+  // pisar (ni ser pisado por) un POST /api/config concurrente.
+  await withConfigLock(async () => {
     const cfg = loadConfig();
     cfg.privateKey = keys.privateKey;
     cfg.publicKey = keys.publicKey;
     cfg.presharedKey = keys.presharedKey || '';
     saveConfig(cfg);
-    audit.log({ action: 'keygen', ip: req.ip, publicKeyFingerprint: keyFingerprint(keys.publicKey) });
-    res.json({ publicKey: keys.publicKey, publicKeyFingerprint: keyFingerprint(keys.publicKey) });
-  } catch (err) {
-    res.status(503).json({ error: 'WireGuard unavailable: ' + err.message });
-  }
-});
+  });
+  audit.log({ action: 'keygen', ip: req.ip, publicKeyFingerprint: keyFingerprint(keys.publicKey) });
+  res.json({ publicKey: keys.publicKey, publicKeyFingerprint: keyFingerprint(keys.publicKey) });
+}));
 
-app.get('/api/status', async (req, res) => {
+app.get('/api/status', requireAuth, async (req, res) => {
   try {
     res.json(await wgApi('/status'));
   } catch {
@@ -654,7 +713,7 @@ app.get('/api/status', async (req, res) => {
   }
 });
 
-app.get('/api/health', (req, res) => {
+app.get('/api/health', requireAuth, (req, res) => {
   if (!fs.existsSync(HEALTH_FILE)) return res.json({});
   try {
     return res.json(JSON.parse(fs.readFileSync(HEALTH_FILE, 'utf8')));
@@ -773,6 +832,12 @@ module.exports = {
   startServer,
   stopBackgroundTimers,
   _internals: {
+    proxyPeerGate,
+    normalizePeerIp,
+    isLoopbackPeer,
+    __setProxyPeersForTest(ips, resolvedAt = Date.now()) {
+      proxyPeers = { ips: new Set(ips), resolvedAt };
+    },
     keyFingerprint,
     isBlockedServiceTarget,
     isDisallowedTargetIp,

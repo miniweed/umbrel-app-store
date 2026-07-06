@@ -25,8 +25,12 @@ class WGHandler(BaseHTTPRequestHandler):
     def is_authorized(self):
         if not EXPECTED_TOKEN:
             return False
-        provided = self.headers.get('x-wg-api-token', '')
-        return hmac.compare_digest(provided, EXPECTED_TOKEN)
+        provided = self.headers.get('x-wg-api-token', '') or ''
+        # Compara como bytes: compare_digest lanza TypeError con str no-ASCII.
+        try:
+            return hmac.compare_digest(provided.encode('utf-8'), EXPECTED_TOKEN.encode('utf-8'))
+        except Exception:
+            return False
 
     def do_GET(self):
         if not self.is_authorized():

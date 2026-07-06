@@ -509,4 +509,86 @@ describe('api hardening', () => {
     expect(full).not.toContain('10.0.0.6');
   });
 
+  // ── proxy peer gate (fix del bootstrap de cookie reportado por nmfretz) ─────
+
+  test('proxy peer gate rejects direct container peers with 403', async () => {
+    const mod = require('../server');
+    const { proxyPeerGate, __setProxyPeersForTest } = mod._internals;
+    __setProxyPeersForTest([], 0); // caché vacía y expirada: fail-closed
+    const res = {
+      statusCode: 0,
+      status(code) { this.statusCode = code; return this; },
+      json(body) { this.body = body; return this; }
+    };
+    let nexted = false;
+    await proxyPeerGate({ socket: { remoteAddress: '::ffff:172.18.0.7' } }, res, () => { nexted = true; });
+    expect(nexted).toBe(false);
+    expect(res.statusCode).toBe(403);
+  });
+
+  test('proxy peer gate allows the app_proxy peer and loopback', async () => {
+    const mod = require('../server');
+    const { proxyPeerGate, __setProxyPeersForTest } = mod._internals;
+    __setProxyPeersForTest(['172.18.0.9']);
+    let nexted = 0;
+    const res = { status() { return this; }, json() { return this; } };
+    await proxyPeerGate({ socket: { remoteAddress: '::ffff:172.18.0.9' } }, res, () => { nexted += 1; });
+    await proxyPeerGate({ socket: { remoteAddress: '::1' } }, res, () => { nexted += 1; });
+    await proxyPeerGate({ socket: { remoteAddress: '127.0.0.1' } }, res, () => { nexted += 1; });
+    expect(nexted).toBe(3);
+  });
+
+  test('status and health endpoints require auth', async () => {
+    const anonStatus = await req(port, 'GET', '/api/status');
+    expect(anonStatus.status).toBe(401);
+    const anonHealth = await req(port, 'GET', '/api/health');
+    expect(anonHealth.status).toBe(401);
+    const authedHealth = await req(port, 'GET', '/api/health', null, {
+      'x-tunnel-api-token': token
+    });
+    expect(authedHealth.status).toBe(200);
+  });
+
+  test('audit endpoint tolerates corrupted log lines', async () => {
+    const payload = JSON.stringify({
+      vpsIp: '1.2.3.4',
+      domain: 'example.com',
+      acmeEmail: 'ops@example.com'
+    });
+    const saved = await req(port, 'POST', '/api/config', payload, {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(saved.status).toBe(200);
+
+    fs.appendFileSync(path.join(tmpDir, 'audit.log'), '{corrupted-line\n');
+    const r = await req(port, 'GET', '/api/audit', null, {
+      'x-tunnel-api-token': token
+    });
+    expect(r.status).toBe(200);
+    const body = JSON.parse(r.body);
+    expect(Array.isArray(body.entries)).toBe(true);
+    expect(body.entries.length).toBeGreaterThan(0);
+  });
+
+  test('wg0.conf is written with 0600 permissions', async () => {
+    const payload = JSON.stringify({
+      vpsIp: '1.2.3.4',
+      vpsPort: 51820,
+      vpsPubKey: 'A'.repeat(43) + '=',
+      domain: 'example.com',
+      acmeEmail: 'ops@example.com',
+      privateKey: 'A'.repeat(43) + '=',
+      publicKey: 'B'.repeat(43) + '=',
+      services: []
+    });
+    const saved = await req(port, 'POST', '/api/config', payload, {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(saved.status).toBe(200);
+    const st = fs.statSync(path.join(tmpDir, 'wg0.conf'));
+    expect(st.mode & 0o777).toBe(0o600);
+  });
+
 });
