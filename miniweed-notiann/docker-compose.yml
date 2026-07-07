@@ -7,7 +7,7 @@ services:
       PROXY_AUTH_WHITELIST: "/s/*,/api/public/*,/uploads/*,/assets/*,/favicon*"
 
   web:
-    image: ghcr.io/miniweed/notiann:0.6.0@sha256:89baf823749d77b7703310171c8e33edb209c1740a627f7c594a1ec19736805a
+    image: ghcr.io/miniweed/notiann:1.0.0@sha256:5bd2ff192764cb6b52889b9413be588a3666bb5416d895134820d35bb459483b
     restart: on-failure
     stop_grace_period: 15s
     user: "1000:1000"
@@ -21,5 +21,11 @@ services:
     environment:
       - PORT=3000
       - DATA_DIR=/data
+      # Aislamiento frente a otras apps: la app resuelve la IP del app_proxy y
+      # detecta peticiones que no pasan por él. En modo "log" solo lo registra
+      # (no bloquea); cámbialo a "enforce" cuando los logs confirmen que la IP
+      # del proxy se detecta bien.
+      - APP_PROXY_HOSTNAME=miniweed-notiann_app_proxy_1
+      - PROXY_ONLY_MODE=log
     volumes:
       - ${APP_DATA_DIR}/data:/data
