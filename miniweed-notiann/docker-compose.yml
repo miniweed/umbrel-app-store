@@ -7,10 +7,17 @@ services:
       PROXY_AUTH_WHITELIST: "/s/*,/api/public/*,/assets/*,/favicon*"
 
   web:
-    image: ghcr.io/miniweed/notiann:0.2.0@sha256:d43b797b20b7bf2b8744248f2ef56ef63c0024179a6fe3e2ef8edb5e6b43da95
+    image: ghcr.io/miniweed/notiann:0.3.0@sha256:a11c24c8c1f3c6b7ba2d8f5d3e21069ffe71855e35f7ce14d8dbd63f234f86d8
     restart: on-failure
     stop_grace_period: 15s
     user: "1000:1000"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
     environment:
       - PORT=3000
       - DATA_DIR=/data
