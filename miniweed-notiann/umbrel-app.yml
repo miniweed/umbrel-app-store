@@ -2,7 +2,7 @@ manifestVersion: 1
 id: miniweed-notiann
 category: files
 name: Notiann
-version: "0.1.0"
+version: "0.2.0"
 tagline: Páginas tipo Notion en markdown, compartibles con un link en vivo
 description: >-
   Notiann es una app minimalista de notas inspirada en Notion. Crea páginas con
@@ -18,7 +18,13 @@ description: >-
   El editor queda protegido por el login de tu Umbrel; solo las páginas que
   compartas explícitamente son públicas. Diseñada para funcionar detrás de un
   reverse proxy o túnel (Cloudflare Tunnel, WireGuard + Caddy, etc.).
-releaseNotes: ""
+releaseNotes: >-
+  Modo oscuro para el editor y para los links compartidos: sigue el tema del
+  sistema y se puede alternar manualmente (se recuerda la elección).
+
+
+  También corrige el placeholder del editor cuando la página empieza con un
+  encabezado vacío.
 developer: miniweed
 website: https://github.com/miniweed/notiann
 dependencies: []
