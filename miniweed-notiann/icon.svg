@@ -1,26 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#3d3b37"/>
-      <stop offset="1" stop-color="#1e1d1b"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#33313a"/>
+      <stop offset="1" stop-color="#1b1a20"/>
     </linearGradient>
   </defs>
-  <rect width="512" height="512" rx="115" fill="url(#bg)"/>
-  <!-- sombra de la página -->
-  <path d="M148 106 H322 L386 170 V402 Q386 424 364 424 H148 Q126 424 126 402 V128 Q126 106 148 106 Z"
-        fill="#000000" opacity="0.35" transform="translate(0 10)"/>
-  <!-- página con esquina doblada -->
-  <path d="M148 96 H322 L386 160 V394 Q386 416 364 416 H148 Q126 416 126 394 V118 Q126 96 148 96 Z"
-        fill="#f7f6f3"/>
-  <path d="M322 96 L386 160 H344 Q322 160 322 138 Z" fill="#dcd8d0"/>
-  <!-- título y líneas de texto -->
-  <rect x="162" y="188" width="132" height="24" rx="9" fill="#37352f"/>
-  <rect x="162" y="240" width="198" height="13" rx="6.5" fill="#c9c5bd"/>
-  <rect x="162" y="270" width="168" height="13" rx="6.5" fill="#c9c5bd"/>
-  <rect x="162" y="300" width="186" height="13" rx="6.5" fill="#c9c5bd"/>
-  <rect x="162" y="330" width="120" height="13" rx="6.5" fill="#c9c5bd"/>
-  <!-- señal "en vivo" -->
-  <circle cx="322" cy="366" r="15" fill="#2e9e5b"/>
-  <path d="M347 341 A35 35 0 0 1 347 391" fill="none" stroke="#2e9e5b" stroke-width="9" stroke-linecap="round" opacity="0.6"/>
-  <path d="M362 326 A56 56 0 0 1 362 406" fill="none" stroke="#2e9e5b" stroke-width="9" stroke-linecap="round" opacity="0.32"/>
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+  <!-- corchete izquierdo [ -->
+  <path d="M198 148 H152 V364 H198" fill="none" stroke="#f7f6f3"
+    stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- corchete derecho ] -->
+  <path d="M314 148 H360 V364 H314" fill="none" stroke="#f7f6f3"
+    stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- check verde en el centro: casilla markdown marcada -->
+  <path d="M214 260 l30 32 l54 -70" fill="none" stroke="#3ecf7f"
+    stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
