@@ -3,6 +3,7 @@ id: miniweed-notiann
 category: files
 name: Notiann
 version: "0.2.0"
+icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-notiann/icon.svg
 tagline: Páginas tipo Notion en markdown, compartibles con un link en vivo
 description: >-
   Notiann es una app minimalista de notas inspirada en Notion. Crea páginas con
