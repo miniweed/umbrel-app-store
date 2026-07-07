@@ -1,6 +1,6 @@
 # miniweed — Umbrel Community App Store
 
-A community [Umbrel](https://umbrel.com) app store. It currently ships one app:
+A community [Umbrel](https://umbrel.com) app store. It currently ships two apps:
 
 ## Tunnel
 
@@ -18,6 +18,24 @@ Umbrel; **Caddy** terminates HTTPS with automatic Let's Encrypt certificates.
 
 See [`miniweed-tunnel/README.md`](miniweed-tunnel/README.md) for the full setup
 guide (renting a VPS, DNS records, hardening).
+
+## Notiann
+
+**Notion-style pages stored as pure markdown, shareable with live-updating public links.**
+
+A minimalist self-hosted notes app. Create pages with a visual block editor
+(`/` menu) that stores pure markdown, organize them into folders, and share any
+page with a public read-only link.
+
+- ✍️ WYSIWYG markdown editor (Milkdown Crepe)
+- 🔗 Shareable read-only links with editable slugs (`/s/my-page`)
+- ⚡ Viewers see your edits live (Server-Sent Events), no reload
+- 🔑 Optional per-page password (scrypt + signed cookies)
+- 🗂 Folders to organize pages
+- 🛡 Editor protected by Umbrel's authenticated app proxy; only pages you share are public
+
+Source: [miniweed/notiann](https://github.com/miniweed/notiann). Pairs well with
+Tunnel to expose your shared links on your own domain.
 
 ## Add this store to Umbrel
 
