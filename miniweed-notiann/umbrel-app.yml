@@ -2,7 +2,7 @@ manifestVersion: 1
 id: miniweed-notiann
 category: files
 name: Notiann
-version: "0.5.0"
+version: "0.6.0"
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-notiann/icon.svg
 tagline: Páginas tipo Notion en markdown, compartibles con un link en vivo
 description: >-
@@ -20,12 +20,12 @@ description: >-
   compartas explícitamente son públicas. Diseñada para funcionar detrás de un
   reverse proxy o túnel (Cloudflare Tunnel, WireGuard + Caddy, etc.).
 releaseNotes: >-
-  - Casillas de tarea: escribe "[] " (o "- [ ] ") al principio de una línea
-    para crear una checkbox, como en Notion. Se ven también en los links
-    compartidos.
+  - Exportar e importar: botones al pie del menú lateral para descargar un .zip
+    con todas tus páginas (en markdown) e imágenes, y para restaurarlas después.
+    Ideal como copia de seguridad manual.
 
-  - Ahora puedes reordenar las páginas del menú lateral con las flechas ↑/↓,
-    tanto en la lista principal como dentro de las carpetas.
+  - Consejo: activa además los Backups de umbrelOS para respaldar la app
+    automáticamente.
 developer: miniweed
 website: https://github.com/miniweed/notiann
 dependencies: []
