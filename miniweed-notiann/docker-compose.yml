@@ -4,13 +4,20 @@ services:
       APP_HOST: miniweed-notiann_web_1
       APP_PORT: 3000
       # Rutas públicas: vista compartida, su API/SSE y los estáticos del frontend.
-      PROXY_AUTH_WHITELIST: "/s/*,/api/public/*,/assets/*,/favicon*"
+      PROXY_AUTH_WHITELIST: "/s/*,/api/public/*,/uploads/*,/assets/*,/favicon*"
 
   web:
-    image: ghcr.io/miniweed/notiann:0.2.0@sha256:d43b797b20b7bf2b8744248f2ef56ef63c0024179a6fe3e2ef8edb5e6b43da95
+    image: ghcr.io/miniweed/notiann:0.4.0@sha256:bb37d0bec04a84d2c06bb23f8e32324f73a52dd7ee3a788c1da601ae6117cb9d
     restart: on-failure
     stop_grace_period: 15s
     user: "1000:1000"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
     environment:
       - PORT=3000
       - DATA_DIR=/data
