@@ -2,7 +2,7 @@ manifestVersion: 1
 id: miniweed-notiann
 category: files
 name: Notiann
-version: "1.0.2"
+version: "1.0.3"
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-notiann/icon.svg
 tagline: Páginas tipo Notion en markdown, compartibles con un link en vivo
 description: >-
@@ -20,13 +20,12 @@ description: >-
   compartas explícitamente son públicas. Diseñada para funcionar detrás de un
   reverse proxy o túnel (Cloudflare Tunnel, WireGuard + Caddy, etc.).
 releaseNotes: >-
-  Cambiar el formato de un bloque de texto: selecciona el texto y usa los nuevos
-  botones del menú flotante (T, H1, H2, H3) para convertirlo en texto normal o
-  en un encabezado.
+  Arreglado el botón «T» del menú flotante: ahora convierte de verdad un
+  encabezado en texto normal (antes no se activaba).
 
 
-  Antes: arreglado el botón «Copiar» del link cuando abres la app por la
-  dirección local (HTTP).
+  Recuerda: selecciona el texto de un bloque y usa T / H1 / H2 / H3 para cambiar
+  su formato.
 
 
   Novedades de la 1.0:
