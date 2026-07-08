@@ -2,7 +2,7 @@ manifestVersion: 1
 id: miniweed-notiann
 category: files
 name: Notiann
-version: "1.0.0"
+version: "1.0.1"
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-notiann/icon.svg
 tagline: Páginas tipo Notion en markdown, compartibles con un link en vivo
 description: >-
@@ -20,7 +20,11 @@ description: >-
   compartas explícitamente son públicas. Diseñada para funcionar detrás de un
   reverse proxy o túnel (Cloudflare Tunnel, WireGuard + Caddy, etc.).
 releaseNotes: >-
-  Versión 1.0 con mejoras grandes:
+  Arreglado el botón «Copiar» del link de compartir cuando abres la app por la
+  dirección local (HTTP): ahora copia siempre.
+
+
+  Novedades de la 1.0:
 
 
   - Búsqueda: encuentra cualquier página por su título o contenido desde el
