@@ -1,0 +1,31 @@
+services:
+  app_proxy:
+    environment:
+      APP_HOST: miniweed-nouts_web_1
+      APP_PORT: 3000
+      # Rutas públicas: vista compartida, su API/SSE y los estáticos del frontend.
+      PROXY_AUTH_WHITELIST: "/s/*,/api/public/*,/uploads/*,/assets/*,/favicon*"
+
+  web:
+    image: ghcr.io/miniweed/nouts:1.0.0@sha256:612a750e15f970f8ce37ed7d91dda1a9a3d60bb815d053afd4995634cc4d99d0
+    restart: on-failure
+    stop_grace_period: 15s
+    user: "1000:1000"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      - PORT=3000
+      - DATA_DIR=/data
+      # Aislamiento frente a otras apps: la app resuelve la IP del app_proxy y
+      # detecta peticiones que no pasan por él. En modo "log" solo lo registra
+      # (no bloquea); cámbialo a "enforce" cuando los logs confirmen que la IP
+      # del proxy se detecta bien.
+      - APP_PROXY_HOSTNAME=miniweed-nouts_app_proxy_1
+      - PROXY_ONLY_MODE=log
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
