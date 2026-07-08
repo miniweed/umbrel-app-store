@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#33313a"/>
+      <stop offset="1" stop-color="#1b1a20"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+  <!-- corchete izquierdo [ -->
+  <path d="M198 148 H152 V364 H198" fill="none" stroke="#f7f6f3"
+    stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- corchete derecho ] -->
+  <path d="M314 148 H360 V364 H314" fill="none" stroke="#f7f6f3"
+    stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- check verde en el centro: casilla markdown marcada -->
+  <path d="M214 260 l30 32 l54 -70" fill="none" stroke="#3ecf7f"
+    stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

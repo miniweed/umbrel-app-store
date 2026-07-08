@@ -1,0 +1,42 @@
+manifestVersion: 1
+id: miniweed-nouts
+category: files
+name: Nouts
+version: "1.0.0"
+icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-nouts/icon.svg
+tagline: Páginas tipo Notion en markdown, compartibles con un link en vivo
+description: >-
+  Nouts es una app minimalista de notas inspirada en Notion. Crea páginas con
+  un editor visual (menú "/" para bloques) que guarda markdown puro, y comparte
+  cualquier página con un link público de solo lectura.
+
+
+  Quien tenga el link ve la página renderizada y recibe tus cambios al instante,
+  sin recargar. Los links tienen slug personalizable (/s/mi-pagina) y contraseña
+  opcional, y se pueden copiar, rotar y revocar cuando quieras.
+
+
+  El editor queda protegido por el login de tu Umbrel; solo las páginas que
+  compartas explícitamente son públicas. Diseñada para funcionar detrás de un
+  reverse proxy o túnel (Cloudflare Tunnel, WireGuard + Caddy, etc.).
+releaseNotes: >-
+  Primera versión de Nouts. Crea páginas en markdown con un editor visual,
+  organízalas en carpetas y compártelas con un link público en vivo (slug
+  personalizable y contraseña opcional).
+
+
+  Incluye búsqueda de texto, papelera con restauración, dominio público
+  configurable para los links, interfaz adaptada a móvil, modo oscuro, subida de
+  imágenes y export/import de todas las páginas.
+developer: miniweed
+website: https://github.com/miniweed/nouts
+dependencies: []
+repo: https://github.com/miniweed/nouts
+support: https://github.com/miniweed/nouts/issues
+port: 8748
+gallery: []
+path: ""
+defaultUsername: ""
+defaultPassword: ""
+submitter: miniweed
+submission: ""
