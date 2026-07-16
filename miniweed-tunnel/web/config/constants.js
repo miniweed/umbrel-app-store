@@ -9,7 +9,10 @@ const WG_API_TOKEN = String(process.env.WG_API_TOKEN || '').trim();
 const MAX_SERVICES = 64;
 
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
-const WG_CONF = path.join(DATA_DIR, 'wg0.conf');
+// wg0.conf vive en un subdir propio: el contenedor wg monta solo DATA_DIR/wg
+// (read-only), así no ve config.json/app-seed/etc.
+const WG_CONF = path.join(DATA_DIR, 'wg', 'wg0.conf');
+const LEGACY_WG_CONF = path.join(DATA_DIR, 'wg0.conf');
 const CADDYFILE = process.env.CADDYFILE_PATH || path.join(DATA_DIR, 'Caddyfile');
 const APP_SEED_FILE = path.join(DATA_DIR, 'app-seed');
 const HEALTH_FILE = path.join(DATA_DIR, 'health.json');
@@ -42,6 +45,7 @@ module.exports = {
   MAX_SERVICES,
   CONFIG_FILE,
   WG_CONF,
+  LEGACY_WG_CONF,
   CADDYFILE,
   APP_SEED_FILE,
   HEALTH_FILE,

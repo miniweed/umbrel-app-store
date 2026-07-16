@@ -8,7 +8,11 @@ upstream version line as the community store (`1.6.x`), per review feedback.
 round by @nmfretz addressed — auth boundary, mount split, secret isolation,
 digest pinning — plus a follow-up hardening pass in `1.6.47`: the web server
 only accepts connections from the app's own `app_proxy` or loopback, so other
-containers on the shared Docker network can't bootstrap API access.)
+containers on the shared Docker network can't bootstrap API access. Third
+review round addressed in `1.6.49`: `DAC_OVERRIDE` on `web`/`caddy` so fresh
+installs with `1000:1000`-owned data dirs can write, and the `wg` container
+now mounts only `data/wg/` — the subdir holding the generated `wg0.conf` —
+instead of the whole app data dir; existing configs migrate on first boot.)
 
 ## Status checklist
 
@@ -19,11 +23,12 @@ containers on the shared Docker network can't bootstrap API access.)
       reach the web server; other containers get 403
 - [x] Secrets isolated: `APP_SEED` only reaches `web`; `caddy`/`wg` get a
       derived token from `exports.sh`
-- [x] Mounts split: Caddy has no access to app data; `wg` mounts `/data` read-only
+- [x] Mounts split: Caddy has no access to app data; `wg` mounts only
+      `data/wg/` (the generated `wg0.conf`) read-only
 - [x] Data persisted in volumes (`${APP_DATA_DIR}/...`), bind-mount dirs committed
       with `.gitkeep`
 - [x] `app_proxy` with Umbrel auth (`PROXY_AUTH_ADD: true`)
-- [x] Manifest (`umbrel-app.yml`) with `version: "1.6.48"` (the packaged upstream
+- [x] Manifest (`umbrel-app.yml`) with `version: "1.6.49"` (the packaged upstream
       version, per review), `gallery: []`, `releaseNotes: ""`, `submitter`, `submission`
 - [x] `docker-compose.yml` with all images pinned by multi-arch digest
 - [x] App tested end-to-end on real umbrelOS (tunnel + HTTPS working)
@@ -34,8 +39,8 @@ containers on the shared Docker network can't bootstrap API access.)
 
 ## Image digests (verify against ghcr.io before re-pinning)
 
-- `ghcr.io/miniweed/umbrel-tunnel-web:1.6.48`
-  `sha256:c4d6af5cf6a2316da0210d44150eeff39e1898fe600f2a296cefd7354a8d01f2`
+- `ghcr.io/miniweed/umbrel-tunnel-web:1.6.49`
+  `(pending publish — re-pin after CI pushes the tag)`
 - `ghcr.io/miniweed/umbrel-tunnel-wg:1.0.6`
   `sha256:22fbcbc01c31ec70c623ac670f195353c5fa37525ccecb18be86d9df2ed87469`
 
@@ -48,7 +53,8 @@ bump. Digest re-pin commits still use `[skip ci]` to save a no-op CI run.
 - `umbrel-app.yml` → `./umbrel-app.yml` from this folder
 - `docker-compose.yml` → `./docker-compose.yml` from this folder
 - `exports.sh` → `../../exports.sh` (derives `TUNNEL_WG_TOKEN` from `APP_SEED`)
-- `data/.gitkeep`, `caddy/data/.gitkeep`, `caddy/config/.gitkeep` (bind-mount dirs)
+- `data/.gitkeep`, `data/wg/.gitkeep`, `caddy/data/.gitkeep`,
+  `caddy/config/.gitkeep` (bind-mount dirs)
 
 ## Updating the PR branch
 

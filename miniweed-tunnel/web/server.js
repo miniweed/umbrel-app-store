@@ -37,6 +37,7 @@ const {
   MAX_SERVICES,
   CONFIG_FILE,
   WG_CONF,
+  LEGACY_WG_CONF,
   CADDYFILE,
   APP_SEED_FILE,
   HEALTH_FILE,
@@ -255,6 +256,7 @@ function requireAuth(req, res, next) {
 function ensureDataDir() {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.mkdirSync(path.dirname(WG_CONF), { recursive: true });
   } catch (err) {
     console.error(`[warn] could not prepare data dir ${DATA_DIR}: ${err.message}`);
     return;
@@ -310,6 +312,27 @@ function migrateConfigIfNeeded() {
     console.log('[migration] config.json encrypted v0 -> v1');
   } catch (err) {
     console.error('[migration] failed to migrate config:', err.message);
+  }
+}
+
+// Hasta 1.6.48 wg0.conf vivía en la raíz de DATA_DIR; ahora vive en DATA_DIR/wg
+// porque el contenedor wg solo monta ese subdir. Mueve el conf existente para
+// que un update no deje al túnel esperando una config que ya estaba escrita.
+function migrateWgConfIfNeeded() {
+  try {
+    if (!fs.existsSync(LEGACY_WG_CONF)) return;
+    if (!fs.existsSync(WG_CONF)) {
+      // Copia en lugar de rename: el archivo nuevo queda con el owner de este
+      // proceso, para que el contenedor wg (sin DAC_OVERRIDE) pueda leerlo
+      // aunque el legacy tuviera otro dueño.
+      writePrivateFile(WG_CONF, fs.readFileSync(LEGACY_WG_CONF));
+      console.log('[migration] wg0.conf moved to wg/ subdir');
+    } else {
+      console.log('[migration] stale legacy wg0.conf removed');
+    }
+    fs.unlinkSync(LEGACY_WG_CONF);
+  } catch (err) {
+    console.error('[migration] failed to migrate wg0.conf:', err.message);
   }
 }
 
@@ -799,6 +822,7 @@ function startServer() {
     32
   )).toString('base64url');
   migrateConfigIfNeeded();
+  migrateWgConfIfNeeded();
   refreshHealthSnapshot();
   if (!healthTimer) {
     healthTimer = setInterval(() => {

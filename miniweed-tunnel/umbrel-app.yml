@@ -3,7 +3,7 @@ id: miniweed-tunnel
 name: Tunnel
 tagline: Expose your services to the world without touching your router
 category: networking
-version: "1.6.48"
+version: "1.6.49"
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.svg
 port: 3016
 description: >-
@@ -28,10 +28,10 @@ repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
 releaseNotes: >-
-  Fixes missing spaces in the Instructions tab text. Includes the 1.6.47
-  security hardening: the web API only accepts connections from the app's
-  authenticated proxy, stricter file permissions for WireGuard configs, and
-  authenticated status/health endpoints.
+  Fixes a write-permissions issue on fresh umbrelOS installs (the web UI could
+  not save its configuration). The WireGuard container now only mounts the
+  generated wg0.conf instead of the whole app data directory; existing configs
+  are migrated automatically on first start.
 dependencies: []
 path: ""
 defaultUsername: ""

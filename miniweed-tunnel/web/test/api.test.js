@@ -587,8 +587,62 @@ describe('api hardening', () => {
       'x-tunnel-api-token': token
     });
     expect(saved.status).toBe(200);
-    const st = fs.statSync(path.join(tmpDir, 'wg0.conf'));
+    const st = fs.statSync(path.join(tmpDir, 'wg', 'wg0.conf'));
     expect(st.mode & 0o777).toBe(0o600);
+    // La raíz de /data ya no debe contener wg0.conf: el contenedor wg solo
+    // monta el subdir wg/.
+    expect(fs.existsSync(path.join(tmpDir, 'wg0.conf'))).toBe(false);
+  });
+
+  test('migrates legacy wg0.conf from DATA_DIR root into wg/ on boot', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'miniweed-web-wgmig-'));
+    const prevData = process.env.DATA_DIR;
+    const prevPort = process.env.PORT;
+
+    fs.writeFileSync(path.join(tempDir, 'wg0.conf'), '[Interface]\n', { mode: 0o600 });
+    process.env.DATA_DIR = tempDir;
+    process.env.PORT = '0';
+
+    jest.resetModules();
+    const mod = require('../server');
+    const s1 = mod.startServer();
+    await new Promise(resolve => s1.on('listening', resolve));
+    await new Promise(resolve => s1.close(resolve));
+    if (typeof mod.stopBackgroundTimers === 'function') mod.stopBackgroundTimers();
+
+    expect(fs.existsSync(path.join(tempDir, 'wg0.conf'))).toBe(false);
+    const migrated = path.join(tempDir, 'wg', 'wg0.conf');
+    expect(fs.existsSync(migrated)).toBe(true);
+    expect(String(fs.readFileSync(migrated, 'utf8'))).toBe('[Interface]\n');
+    expect(fs.statSync(migrated).mode & 0o777).toBe(0o600);
+
+    if (prevData === undefined) delete process.env.DATA_DIR; else process.env.DATA_DIR = prevData;
+    if (prevPort === undefined) delete process.env.PORT; else process.env.PORT = prevPort;
+  });
+
+  test('removes stale legacy wg0.conf when the new path already exists', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'miniweed-web-wgmig2-'));
+    const prevData = process.env.DATA_DIR;
+    const prevPort = process.env.PORT;
+
+    fs.mkdirSync(path.join(tempDir, 'wg'), { recursive: true });
+    fs.writeFileSync(path.join(tempDir, 'wg', 'wg0.conf'), '[Interface]\n# new\n', { mode: 0o600 });
+    fs.writeFileSync(path.join(tempDir, 'wg0.conf'), '[Interface]\n# old\n', { mode: 0o600 });
+    process.env.DATA_DIR = tempDir;
+    process.env.PORT = '0';
+
+    jest.resetModules();
+    const mod = require('../server');
+    const s1 = mod.startServer();
+    await new Promise(resolve => s1.on('listening', resolve));
+    await new Promise(resolve => s1.close(resolve));
+    if (typeof mod.stopBackgroundTimers === 'function') mod.stopBackgroundTimers();
+
+    expect(fs.existsSync(path.join(tempDir, 'wg0.conf'))).toBe(false);
+    expect(String(fs.readFileSync(path.join(tempDir, 'wg', 'wg0.conf'), 'utf8'))).toBe('[Interface]\n# new\n');
+
+    if (prevData === undefined) delete process.env.DATA_DIR; else process.env.DATA_DIR = prevData;
+    if (prevPort === undefined) delete process.env.PORT; else process.env.PORT = prevPort;
   });
 
 });
