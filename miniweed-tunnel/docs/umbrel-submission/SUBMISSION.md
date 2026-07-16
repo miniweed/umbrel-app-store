@@ -40,7 +40,7 @@ instead of the whole app data dir; existing configs migrate on first boot.)
 ## Image digests (verify against ghcr.io before re-pinning)
 
 - `ghcr.io/miniweed/umbrel-tunnel-web:1.6.49`
-  `(pending publish — re-pin after CI pushes the tag)`
+  `sha256:984ba28eb543e0f8c9d506fc3166c5220e40ebca890536b92bcfb8698b7b7b68`
 - `ghcr.io/miniweed/umbrel-tunnel-wg:1.0.6`
   `sha256:22fbcbc01c31ec70c623ac670f195353c5fa37525ccecb18be86d9df2ed87469`
 
