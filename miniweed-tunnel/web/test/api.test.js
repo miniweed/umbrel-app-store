@@ -645,4 +645,104 @@ describe('api hardening', () => {
     if (prevPort === undefined) delete process.env.PORT; else process.env.PORT = prevPort;
   });
 
+  // ── Regresiones de la auditoría de seguridad ────────────────────────────────
+
+  test('la migración v0->v1 cifra y elimina el backup en claro (M1)', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'miniweed-web-cfgmig-'));
+    const prevData = process.env.DATA_DIR;
+    const prevPort = process.env.PORT;
+
+    const plainKey = 'A'.repeat(43) + '=';
+    fs.writeFileSync(path.join(tempDir, 'config.json'), JSON.stringify({
+      privateKey: plainKey,
+      domain: 'example.com',
+      acmeEmail: 'ops@example.com'
+    }), { mode: 0o600 });
+    process.env.DATA_DIR = tempDir;
+    process.env.PORT = '0';
+
+    jest.resetModules();
+    const mod = require('../server');
+    const s1 = mod.startServer();
+    await new Promise(resolve => s1.on('listening', resolve));
+    await new Promise(resolve => s1.close(resolve));
+    if (typeof mod.stopBackgroundTimers === 'function') mod.stopBackgroundTimers();
+
+    // Sin backup en claro y config migrado a v1 cifrado.
+    expect(fs.existsSync(path.join(tempDir, 'config.json.v0.bak'))).toBe(false);
+    const migrated = JSON.parse(fs.readFileSync(path.join(tempDir, 'config.json'), 'utf8'));
+    expect(migrated._encVersion).toBe(1);
+    expect(typeof migrated.privateKey).toBe('object'); // sealed {v,n,c,t}
+    expect(JSON.stringify(migrated)).not.toContain(plainKey);
+
+    if (prevData === undefined) delete process.env.DATA_DIR; else process.env.DATA_DIR = prevData;
+    if (prevPort === undefined) delete process.env.PORT; else process.env.PORT = prevPort;
+    jest.resetModules();
+  });
+
+  test('audit log registra la IP de socket real, no X-Forwarded-For (M3)', async () => {
+    const r = await req(port, 'GET', '/api/config', null, { 'X-Forwarded-For': '6.6.6.6' });
+    expect(r.status).toBe(401); // 401 != 200: queda registrado en audit
+    const lines = fs.readFileSync(path.join(tmpDir, 'audit.log'), 'utf8').trim().split('\n').map(JSON.parse);
+    const entry = lines.find(e => e.path === '/api/config' && e.status === 401);
+    expect(entry).toBeTruthy();
+    expect(entry.ip).not.toBe('6.6.6.6');
+    expect(['127.0.0.1', '::1', '::ffff:127.0.0.1']).toContain(entry.ip);
+  });
+
+  test('GET /index.html sirve la SPA: la UI legacy fue eliminada (B1)', async () => {
+    const r = await req(port, 'GET', '/index.html');
+    expect(r.status).toBe(200);
+    expect(r.body).toContain('id="app"');
+    expect(r.body).not.toContain('__TUNNEL_API_TOKEN__');
+  });
+
+  test('los generadores sanea claves WireGuard inválidas (B2 defense in depth)', () => {
+    const mod = require('../server');
+    const valid = 'A'.repeat(43) + '=';
+    const target = { id: 'vps-a', name: 'A', ip: '203.0.113.7', port: 51820 };
+
+    // PSK inválida -> se omite; nunca se interpola en el bash que corre como root.
+    const script = mod._internals.generateVpsScript(
+      { publicKey: valid, presharedKey: 'evil\nrm -rf /', tunnelClientIp: '10.8.0.2', tunnelServerIp: '10.8.0.1' },
+      target
+    );
+    expect(script).not.toContain('rm -rf');
+    expect(script).not.toContain('PresharedKey = evil');
+
+    // Clave pública inválida -> fail-closed (no se genera un script roto).
+    expect(() => mod._internals.generateVpsScript({ publicKey: 'evil; rm -rf /' }, target)).toThrow();
+
+    // wg0.conf: claves inválidas -> null; PSK inválida -> línea omitida.
+    const active = { ...target, pubKey: valid };
+    expect(mod._internals.generateWgConf(
+      { privateKey: 'evil\nrm -rf /', tunnelClientIp: '10.8.0.2', tunnelServerIp: '10.8.0.1' },
+      active
+    )).toBeNull();
+    expect(mod._internals.generateWgConf(
+      { privateKey: valid, tunnelClientIp: '10.8.0.2', tunnelServerIp: '10.8.0.1' },
+      { ...active, pubKey: 'evil; rm -rf /' }
+    )).toBeNull();
+    const conf = mod._internals.generateWgConf(
+      { privateKey: valid, presharedKey: 'evil;rm -rf /', tunnelClientIp: '10.8.0.2', tunnelServerIp: '10.8.0.1' },
+      active
+    );
+    expect(conf).not.toBeNull();
+    expect(conf).not.toContain('PresharedKey');
+  });
+
+  test('keepAliveTimeout es finito y headersTimeout lo supera (B3)', () => {
+    expect(server.keepAliveTimeout).toBe(75_000);
+    expect(server.headersTimeout).toBeGreaterThan(server.keepAliveTimeout);
+  });
+
+  test('JSON malformado responde 400, no 500 (B4)', async () => {
+    const r = await req(port, 'POST', '/api/config', '{not-json', {
+      'Content-Type': 'application/json',
+      'x-tunnel-api-token': token
+    });
+    expect(r.status).toBe(400);
+    expect(JSON.parse(r.body).error).toBe('Bad request');
+  });
+
 });

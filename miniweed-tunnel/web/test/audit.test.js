@@ -62,4 +62,22 @@ describe('audit hash chain', () => {
     expect(result.reason).toBe('prev_hash_mismatch');
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  test('la rotación reinicia la cadena: verifyChain no da falso positivo', () => {
+    const { dir, audit } = freshAudit();
+    audit.log({ action: 'pre-rotacion' });
+    const auditPath = path.join(dir, 'audit.log');
+    // Infla el archivo por encima de MAX_SIZE sin pasar por log() (no toca lastHash).
+    fs.appendFileSync(auditPath, 'x'.repeat(11 * 1024 * 1024));
+    audit.log({ action: 'post-rotacion' }); // dispara la rotación
+
+    expect(fs.existsSync(`${auditPath}.1`)).toBe(true);
+    const result = audit.verifyChain();
+    expect(result.ok).toBe(true);
+    expect(result.entries).toBe(1);
+    // El archivo nuevo arranca con prevHash génesis.
+    const first = JSON.parse(fs.readFileSync(auditPath, 'utf8').trim().split('\n')[0]);
+    expect(first.prevHash).toBe('0'.repeat(64));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });

@@ -121,11 +121,12 @@ app.use((req, res, next) => {
   next();
 });
 
-// realIp: usa el peer TCP (no falsificable vía X-Forwarded-For) para el conteo.
-// Imprescindible en endpoints sensibles a fuerza bruta.
+// El conteo usa siempre el peer TCP real (authClientIp), no falsificable vía
+// X-Forwarded-For: sin esto un cliente podría resetear su bucket (o envenenar
+// el audit log) simplemente cambiando la cabecera en cada petición.
 const rateBuckets = {
   default: { max: 120, windowMs: 60_000 },
-  '/api/keygen': { max: 5, windowMs: 3_600_000, realIp: true },
+  '/api/keygen': { max: 5, windowMs: 3_600_000 },
   '/api/vps-setup-script': { max: 10, windowMs: 600_000 },
   '/api/config': { max: 30, windowMs: 60_000 }
 };
@@ -134,15 +135,15 @@ let rateGc = null;
 let healthTimer = null;
 let runningServers = 0;
 
-app.set('trust proxy', 1);
-
 function withConfigLock(fn) {
   const run = configLock.then(() => fn());
   configLock = run.catch(() => {});
   return run;
 }
 
-// Real TCP peer IP (not spoofable via X-Forwarded-For) for rate limiting.
+// Real TCP peer IP (not spoofable via X-Forwarded-For) for rate limiting and
+// audit trails. Deliberadamente no se usa `trust proxy`: el único salto
+// confiable es el app_proxy y su identidad ya la garantiza el proxy peer gate.
 function authClientIp(req) {
   return req.socket?.remoteAddress || req.ip || 'unknown';
 }
@@ -181,7 +182,7 @@ function apiRateLimit(req, res, next) {
   const store = apiRateStore.get(bucketName) || new Map();
   apiRateStore.set(bucketName, store);
   const now = Date.now();
-  const ip = bucket.realIp ? authClientIp(req) : (req.ip || req.socket?.remoteAddress || 'unknown');
+  const ip = authClientIp(req);
   const entry = store.get(ip);
 
   if (!entry || now > entry.resetAt) {
@@ -208,7 +209,7 @@ app.use((req, res, next) => {
       action: `http.${req.method.toLowerCase()}`,
       path: req.path,
       status: res.statusCode,
-      ip: req.ip,
+      ip: authClientIp(req),
       ua: (req.get('user-agent') || '').slice(0, 120)
     });
   });
@@ -309,7 +310,12 @@ function migrateConfigIfNeeded() {
     fs.copyFileSync(CONFIG_FILE, backup);
     fs.chmodSync(backup, 0o600);
     saveConfig(raw || {});
-    console.log('[migration] config.json encrypted v0 -> v1');
+    // El backup contiene la clave privada en claro: conservarlo anularía el
+    // cifrado en reposo. Solo se borra tras escribir la v1 cifrada con éxito;
+    // si saveConfig lanza, el .bak queda como red de seguridad y el original
+    // sigue intacto (saveConfig escribe tmp + rename atómico).
+    fs.unlinkSync(backup);
+    console.log('[migration] config.json encrypted v0 -> v1 (plaintext backup removed)');
   } catch (err) {
     console.error('[migration] failed to migrate config:', err.message);
   }
@@ -687,7 +693,7 @@ app.post('/api/config', requireAuth, async (req, res) => {
         action: 'config.update',
         domain: cfg.domain,
         serviceCount: cfg.services.length,
-        ip: req.ip
+        ip: authClientIp(req)
       });
 
       const wgConf = generateWgConf(cfg, getActiveVpsTarget(cfg));
@@ -724,7 +730,7 @@ app.get('/api/keygen', requireAuth, asyncHandler(async (req, res) => {
     cfg.presharedKey = keys.presharedKey || '';
     saveConfig(cfg);
   });
-  audit.log({ action: 'keygen', ip: req.ip, publicKeyFingerprint: keyFingerprint(keys.publicKey) });
+  audit.log({ action: 'keygen', ip: authClientIp(req), publicKeyFingerprint: keyFingerprint(keys.publicKey) });
   res.json({ publicKey: keys.publicKey, publicKeyFingerprint: keyFingerprint(keys.publicKey) });
 }));
 
@@ -769,12 +775,12 @@ app.get('/api/vps-setup-script', requireAuth, (req, res) => {
   const script = generateVpsScript(cfg, selected);
   const sha256 = crypto.createHash('sha256').update(script).digest('hex');
   if (req.query.format === 'plain') {
-    audit.log({ action: 'script.download', format: 'plain', ip: req.ip, vpsId: selected.id });
+    audit.log({ action: 'script.download', format: 'plain', ip: authClientIp(req), vpsId: selected.id });
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="miniweed-tunnel-vps-setup.sh"');
     return res.send(script);
   }
-  audit.log({ action: 'script.download', format: 'json', ip: req.ip, vpsId: selected.id });
+  audit.log({ action: 'script.download', format: 'json', ip: authClientIp(req), vpsId: selected.id });
   return res.json({
     script,
     sha256,
@@ -799,11 +805,20 @@ app.get('/api/audit/verify', requireAuth, (req, res) => {
 // Red de seguridad: cualquier throw síncrono o rechazo reenviado vía next(err)
 // (handlers envueltos en asyncHandler) responde 500 en vez de colgar la request.
 // No expone err.message al cliente para no filtrar contexto sensible.
+// Excepción: los errores del body parser (JSON malformado, body > 32kb) llevan
+// err.status 4xx — son errores del cliente, se responden como tal y no se
+// registran como request.error en el audit log.
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
+  const clientStatus = Number(err && (err.status || err.statusCode));
+  if (clientStatus >= 400 && clientStatus < 500) {
+    return res.status(clientStatus).json({
+      error: clientStatus === 413 ? 'Payload too large' : 'Bad request'
+    });
+  }
   console.error(`[error] ${req.method} ${req.path}: ${err && err.message ? err.message : err}`);
   try {
-    audit.log({ action: 'request.error', ip: req.ip, path: req.path });
+    audit.log({ action: 'request.error', ip: authClientIp(req), path: req.path });
   } catch {}
   return res.status(500).json({ error: 'Internal error' });
 });
@@ -836,7 +851,11 @@ function startServer() {
     const actualPort = server.address() && server.address().port ? server.address().port : PORT;
     console.log(`[web] Umbrel Tunnel UI en :${actualPort}`);
   });
-  server.keepAliveTimeout = 0;
+  // keepAliveTimeout > el idle típico de un proxy (60s) permite reuso desde el
+  // app_proxy; un valor finito (antes 0 = sin timeout) evita acumular sockets
+  // idle hasta agotar descriptores. headersTimeout debe ser estrictamente mayor.
+  server.keepAliveTimeout = 75_000;
+  server.headersTimeout = 76_000;
   runningServers += 1;
   server.on('close', () => {
     runningServers = Math.max(0, runningServers - 1);

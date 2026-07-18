@@ -5,7 +5,8 @@ const crypto = require('crypto');
 const AUDIT_PATH = path.join(process.env.DATA_DIR || '/data', 'audit.log');
 const MAX_SIZE = 10 * 1024 * 1024;
 const MAX_FILES = 5;
-let lastHash = '0'.repeat(64);
+const GENESIS_HASH = '0'.repeat(64);
+let lastHash = GENESIS_HASH;
 
 function init() {
   if (!fs.existsSync(AUDIT_PATH)) return;
@@ -15,7 +16,7 @@ function init() {
     const last = JSON.parse(lines[lines.length - 1]);
     if (last && typeof last.hash === 'string') lastHash = last.hash;
   } catch {
-    lastHash = '0'.repeat(64);
+    lastHash = GENESIS_HASH;
   }
 }
 
@@ -29,6 +30,10 @@ function rotateIfNeeded() {
     if (fs.existsSync(src)) fs.renameSync(src, dst);
   }
   fs.renameSync(AUDIT_PATH, `${AUDIT_PATH}.1`);
+  // El archivo nuevo inicia una cadena nueva (prevHash génesis): verifyChain
+  // solo lee el archivo activo, así que encadenar con el archivo rotado haría
+  // que toda verificación post-rotación diera un falso "manipulado".
+  lastHash = GENESIS_HASH;
 }
 
 function log(event) {
@@ -57,7 +62,7 @@ function readLatest(limit = 100) {
 function verifyChain() {
   if (!fs.existsSync(AUDIT_PATH)) return { ok: true, entries: 0 };
   const lines = fs.readFileSync(AUDIT_PATH, 'utf8').trim().split('\n').filter(Boolean);
-  let prev = '0'.repeat(64);
+  let prev = GENESIS_HASH;
   for (let i = 0; i < lines.length; i += 1) {
     let parsed;
     try {
