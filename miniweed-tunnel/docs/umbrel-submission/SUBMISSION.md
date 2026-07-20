@@ -12,7 +12,13 @@ containers on the shared Docker network can't bootstrap API access. Third
 review round addressed in `1.6.49`: `DAC_OVERRIDE` on `web`/`caddy` so fresh
 installs with `1000:1000`-owned data dirs can write, and the `wg` container
 now mounts only `data/wg/` — the subdir holding the generated `wg0.conf` —
-instead of the whole app data dir; existing configs migrate on first boot.)
+instead of the whole app data dir; existing configs migrate on first boot.
+Fourth review round addressed in `1.6.50`: dropped the unused `SYS_MODULE`
+capability from `wg` (`NET_ADMIN` alone is enough; the image never loads
+kernel modules), plus an internal security-hardening pass — encrypted
+migration backups, correct audit-log chain verification across rotations,
+and audit/rate-limit logging keyed on the real connection IP instead of a
+spoofable header.)
 
 ## Status checklist
 
@@ -28,7 +34,7 @@ instead of the whole app data dir; existing configs migrate on first boot.)
 - [x] Data persisted in volumes (`${APP_DATA_DIR}/...`), bind-mount dirs committed
       with `.gitkeep`
 - [x] `app_proxy` with Umbrel auth (`PROXY_AUTH_ADD: true`)
-- [x] Manifest (`umbrel-app.yml`) with `version: "1.6.49"` (the packaged upstream
+- [x] Manifest (`umbrel-app.yml`) with `version: "1.6.50"` (the packaged upstream
       version, per review), `gallery: []`, `releaseNotes: ""`, `submitter`, `submission`
 - [x] `docker-compose.yml` with all images pinned by multi-arch digest
 - [x] App tested end-to-end on real umbrelOS (tunnel + HTTPS working)
@@ -39,9 +45,9 @@ instead of the whole app data dir; existing configs migrate on first boot.)
 
 ## Image digests (verify against ghcr.io before re-pinning)
 
-- `ghcr.io/miniweed/umbrel-tunnel-web:1.6.49`
-  `sha256:984ba28eb543e0f8c9d506fc3166c5220e40ebca890536b92bcfb8698b7b7b68`
-- `ghcr.io/miniweed/umbrel-tunnel-wg:1.0.6`
+- `ghcr.io/miniweed/umbrel-tunnel-web:1.6.50`
+  `PENDING — pin after publish-images builds this tag`
+- `ghcr.io/miniweed/umbrel-tunnel-wg:1.0.6` (unchanged, only the compose `cap_add` moved)
   `sha256:22fbcbc01c31ec70c623ac670f195353c5fa37525ccecb18be86d9df2ed87469`
 
 Note: `publish-images.yml` skips any image whose version tag already exists on

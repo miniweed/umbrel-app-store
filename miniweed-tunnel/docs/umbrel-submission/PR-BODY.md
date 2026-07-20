@@ -17,9 +17,8 @@ privileged action happens only on the user's own server, never on the Umbrel hos
 
 - **On the Umbrel host (this app):** fully sandboxed. `web` runs with
   `cap_drop: ALL` + `no-new-privileges`; `caddy` adds only `NET_BIND_SERVICE`;
-  only `wg` needs `NET_ADMIN` + `SYS_MODULE` for WireGuard — the same model as the
-  official **Tailscale** app. No `privileged`, no host network, no host bind
-  mounts. The app cannot affect the Umbrel host or other apps.
+  only `wg` needs `NET_ADMIN` for WireGuard. No `privileged`, no host network,
+  no host bind mounts. The app cannot affect the Umbrel host or other apps.
 - **On the user's own VPS:** the generated setup script is run by the user, as root,
   on a server *they* own and rent — the same trust model as any VPS setup guide.
   The app never touches that machine itself.
