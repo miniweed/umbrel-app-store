@@ -46,7 +46,7 @@ spoofable header.)
 ## Image digests (verify against ghcr.io before re-pinning)
 
 - `ghcr.io/miniweed/umbrel-tunnel-web:1.6.50`
-  `PENDING — pin after publish-images builds this tag`
+  `sha256:be804173c119b54181049cb17ae4987795ab425d8908648dcd09de81852674da`
 - `ghcr.io/miniweed/umbrel-tunnel-wg:1.0.6` (unchanged, only the compose `cap_add` moved)
   `sha256:22fbcbc01c31ec70c623ac670f195353c5fa37525ccecb18be86d9df2ed87469`
 
