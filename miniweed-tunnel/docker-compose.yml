@@ -8,7 +8,7 @@ services:
       APP_PORT: 3016
 
   web:
-    image: ghcr.io/miniweed/umbrel-tunnel-web:1.7.0
+    image: ghcr.io/miniweed/umbrel-tunnel-web:1.7.0@sha256:634c78bab179fcb6d865cbd93c52252762480e670609de41e72e0bcd200a1f7a
     restart: on-failure
     stop_grace_period: 30s
     cap_drop:
