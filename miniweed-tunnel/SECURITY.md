@@ -10,8 +10,7 @@ user's own server, never on the Umbrel host.
 - `web` — `cap_drop: ALL`, `no-new-privileges`. Runs the API/UI only.
 - `caddy` — `cap_drop: ALL` + `NET_BIND_SERVICE` only (to bind 80/443),
   `no-new-privileges`; shares the `wg` network namespace.
-- `wg` — `cap_drop: ALL` + `NET_ADMIN` + `SYS_MODULE` (required for WireGuard,
-  the same model as the official Tailscale app).
+- `wg` — `cap_drop: ALL` + `NET_ADMIN` (required for WireGuard).
 
 No `privileged` containers, no host networking, no host bind mounts. The app
 cannot affect the Umbrel host or other installed apps.
@@ -33,7 +32,16 @@ never touches that machine itself. The script:
   be exposed.
 - **Encryption at rest** for secrets and service targets (AES-256-GCM, scrypt KDF).
 - **Tamper-evident audit log** (SHA-256 hash chain).
-- Panel access protected by Umbrel's authenticated app proxy.
+- Panel access protected by Umbrel's authenticated app gateway (`app_proxy` on
+  umbrelOS 1.x; in-process gateway on umbrelOS 2.x — both are supported).
+- Internal peer gate: the web server answers only loopback and the app gateway;
+  every other container on the shared Docker network gets 403 before touching
+  any route. On 1.x the host IP is admitted solely for umbreld's `GET /api/widget`
+  (secret-free); the UI and API still require `app_proxy`. Detection is sticky
+  (has `app_proxy` resolved since boot), so an `app_proxy` restart or a DNS hiccup
+  never downgrades the gate.
+- The API never returns the WireGuard private key or the preshared key; both are
+  masked and only consumed server-side when generating the VPS script.
 
 ## Threat Model (current)
 
@@ -44,6 +52,11 @@ never touches that machine itself. The script:
   - SSRF / abuse of the reverse-proxy target configuration.
 - Out of scope:
   - Root compromise of the host Umbrel OS.
+  - On umbrelOS 2.x, apps running with `network_mode: host`: they share the
+    host's bridge IP with umbreld's in-process gateway and umbreld adds no
+    verifiable secret to proxied requests, so the app cannot tell them apart
+    at the TCP level. This is a platform property that affects every 2.x app;
+    on 1.x the stricter `app_proxy`-only rule applies.
   - Security of the user's VPS beyond what the setup script configures.
   - Physical compromise of the machine.
 

@@ -1,12 +1,13 @@
-// Generadores de artefactos (wg0.conf, Caddyfile, script de VPS, kill-switch,
-// rotación). Funciones puras extraídas de server.js; reciben el target ya resuelto.
+// Artifact generators (wg0.conf, Caddyfile, VPS script, kill-switch,
+// rotation). Pure functions extracted from server.js; they receive the
+// already-resolved target.
 const { safeTunnelIp, isBlockedServiceTarget, isWireGuardKey } = require("./validation");
 const { DEFAULT_CONFIG, DEFAULT_CADDYFILE } = require("../config/constants");
 
-// Saneador defensivo (misma idea que safeTunnelIp): estas claves se interpolan
-// en wg0.conf y en un script bash que corre como root en el VPS. Si el valor no
-// es una clave válida (p. ej. un config escrito por otra vía que no pasa por la
-// validación del POST), se cae al valor seguro en lugar de propagar la cadena.
+// Defensive sanitizer (same idea as safeTunnelIp): these keys are interpolated
+// into wg0.conf and into a bash script that runs as root on the VPS. If the
+// value is not a valid key (e.g. a config written by another path that skips
+// POST validation), fall back to the safe value instead of propagating it.
 function safeWgKey(value) {
   return isWireGuardKey(value) ? value : '';
 }
@@ -24,8 +25,8 @@ function generateWgConf(cfg, active) {
     '[Interface]',
     `Address = ${clientIp}/32`,
     `PrivateKey = ${privateKey}`,
-    // MTU reducido: evita que paquetes grandes (p. ej. la cadena de cert TLS)
-    // se descarten en el túnel detrás de enlaces con MTU < 1500.
+    // Reduced MTU: prevents large packets (e.g. the TLS cert chain) from being
+    // dropped in the tunnel behind links with MTU < 1500.
     'MTU = 1240',
     '',
     '[Peer]',
@@ -55,8 +56,8 @@ function generateVpsScript(cfg, target) {
   if (!selected) throw new Error('No VPS selected');
   const clientIp = safeTunnelIp(cfg.tunnelClientIp, DEFAULT_CONFIG.tunnelClientIp);
   const serverIp = safeTunnelIp(cfg.tunnelServerIp, DEFAULT_CONFIG.tunnelServerIp);
-  // Fail-closed: sin clave pública válida no se genera un script roto que el
-  // usuario ejecutaría como root (la PSK inválida simplemente se omite).
+  // Fail-closed: without a valid public key no broken script is generated for
+  // the user to run as root (an invalid PSK is simply omitted).
   const publicKey = safeWgKey(cfg.publicKey);
   if (!publicKey) throw new Error('Invalid or missing Umbrel public key');
   const psk = safeWgKey(cfg.presharedKey);

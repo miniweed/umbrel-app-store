@@ -10,13 +10,18 @@ fully configured state. Used for `docs/umbrel-submission/gallery/`.
   `/keygen` returns valid X25519 keys; `/status` reports connected iff the file
   `./wg-connected` exists (the shoot script creates it between phases).
 - `shoot.js` — Playwright (Chromium, viewport 1440×900):
-  - Phase A (fresh data dir, "No tunnel"): captures `02-configuration` with the
+  - Phase A (fresh data dir, "No tunnel"): captures `03-configuration` with the
     required-field outlines.
   - Seeds the config via the API (keygen + POST /api/config) so no toasts appear,
     with two example services pointing at `LAN_IP` ports 8096/8123 — run real
     listeners there so the health pills come out green.
-  - Phase B ("Connected"): captures `01-instructions`, `03-vps-setup` (script +
-    SHA-256 visible) and `04-services`.
+  - Phase B ("Connected"): captures `01-dashboard`, `02-instructions`,
+    `04-vps-setup` (script + SHA-256 visible) and `05-services`.
+
+> The current gallery (1.7.0) was captured by hand on a Retina display at the
+> same viewport and normalised to 1440×900 with `sips` (resample height 900,
+> centre-crop width 1440). `shoot.js` still targets the old 4-file naming; update
+> it before re-running.
 
 ## Run
 

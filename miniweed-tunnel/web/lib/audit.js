@@ -30,9 +30,9 @@ function rotateIfNeeded() {
     if (fs.existsSync(src)) fs.renameSync(src, dst);
   }
   fs.renameSync(AUDIT_PATH, `${AUDIT_PATH}.1`);
-  // El archivo nuevo inicia una cadena nueva (prevHash génesis): verifyChain
-  // solo lee el archivo activo, así que encadenar con el archivo rotado haría
-  // que toda verificación post-rotación diera un falso "manipulado".
+  // The new file starts a fresh chain (genesis prevHash): verifyChain only
+  // reads the active file, so chaining to the rotated file would make every
+  // post-rotation verification report a false "tampered".
   lastHash = GENESIS_HASH;
 }
 
@@ -53,7 +53,7 @@ function log(event) {
 function readLatest(limit = 100) {
   if (!fs.existsSync(AUDIT_PATH)) return [];
   const lines = fs.readFileSync(AUDIT_PATH, 'utf8').trim().split('\n').filter(Boolean);
-  // Una línea corrupta no debe tumbar la lectura; verifyChain ya la reporta.
+  // A corrupt line must not break the read; verifyChain already reports it.
   return lines.slice(-limit).flatMap(line => {
     try { return [JSON.parse(line)]; } catch { return []; }
   });

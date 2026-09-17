@@ -3,14 +3,20 @@ id: miniweed-tunnel
 name: Tunnel
 tagline: Expose your services to the world without touching your router
 category: networking
-version: "1.6.50"
+version: "1.7.0"
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.svg
 port: 3016
 description: >-
   Connect your Umbrel to your own VPS and expose services to the internet without
   opening ports on your router. A 100% self-hosted alternative to Cloudflare Tunnel.
   Works behind CGNAT. Uses WireGuard for end-to-end encryption and Caddy for
-  automatic HTTPS with Let's Encrypt.
+  automatic public HTTPS with Let's Encrypt on your own domain.
+
+
+  umbrelOS 2.0 already gives you HTTPS on your local network with a private
+  certificate authority. Tunnel complements it: it gives your services valid,
+  publicly trusted HTTPS on your own domain, reachable from anywhere on the
+  internet — not just your LAN.
 
 
   The app generates a one-command script that not only sets up the tunnel on your
@@ -28,13 +34,47 @@ repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
 releaseNotes: >-
-  Internal security hardening: encrypted migration backups no longer leave a
-  plaintext copy of the WireGuard private key on disk, the tamper-evident
-  audit log verifies correctly across log rotations, and audit/rate-limit
-  logging uses the real connection IP instead of a spoofable header. The
-  WireGuard container also drops the unused SYS_MODULE capability, keeping
-  only NET_ADMIN.
+  umbrelOS 2.0 compatibility: the app now works with Umbrel's new in-process app
+  gateway (the app_proxy container no longer exists in umbrelOS 2.x), while
+  remaining compatible with umbrelOS 1.x.
+
+
+  New home screen widget showing tunnel status, healthy services, and your public
+  domain at a glance.
+
+
+  Regenerable data (Let's Encrypt certificates and health snapshots) is now
+  excluded from umbrelOS backups, keeping backups smaller without losing any
+  tunnel configuration or keys.
+
+
+  Also: the WireGuard API token now derives from Umbrel's standard entropy
+  helper, and the app regenerates its proxy configuration from your saved
+  settings on startup, so restoring from a backup no longer leaves the proxy
+  waiting on a missing config.
 dependencies: []
 path: ""
 defaultUsername: ""
 defaultPassword: ""
+backupIgnore:
+  - caddy/data/*
+  - data/health.json
+widgets:
+  - id: "status"
+    type: "three-stats"
+    refresh: "30s"
+    endpoint: "web:3016/api/widget"
+    link: ""
+    example:
+      type: "three-stats"
+      link: ""
+      items:
+        - icon: "route"
+          text: "Connected"
+          subtext: "handshake 42s ago"
+        - icon: "server-2"
+          text: "2/3"
+          subtext: "services healthy"
+        - icon: "world"
+          text: "example.com"
+          subtext: "public domain"

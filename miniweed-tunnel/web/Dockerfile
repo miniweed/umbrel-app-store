@@ -19,5 +19,5 @@ COPY docker-entrypoint.sh ./
 RUN mkdir -p /data \
   && chmod 755 /app/docker-entrypoint.sh
 
-EXPOSE 3000
+EXPOSE 3016
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

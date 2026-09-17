@@ -1,6 +1,6 @@
-// Helpers de validación puros, extraídos de server.js para reducir el monolito.
-// Sin estado ni I/O (salvo crypto para huellas). validateEmailWithMx permanece en
-// server.js por su dependencia de DNS.
+// Pure validation helpers, extracted from server.js to shrink the monolith.
+// No state or I/O (except crypto for fingerprints). validateEmailWithMx stays
+// in server.js because of its DNS dependency.
 const crypto = require('crypto');
 
 function isWireGuardKey(value) {
@@ -48,9 +48,9 @@ function isValidIpv4(value) {
   return true;
 }
 
-// Saneador defensivo: estas IPs se interpolan en bash/iptables/wg0.conf que corre
-// como root en el VPS. Si el valor no es IPv4 estricta (p. ej. inyectado vía restore),
-// se cae al valor por defecto seguro en lugar de propagar la cadena.
+// Defensive sanitizer: these IPs are interpolated into bash/iptables/wg0.conf
+// that runs as root on the VPS. If the value is not strict IPv4 (e.g. injected
+// via a restore), fall back to the safe default instead of propagating it.
 function safeTunnelIp(value, fallback) {
   return isValidIpv4(value) ? value : fallback;
 }
@@ -85,12 +85,13 @@ function normalizeTargetUrl(value) {
   }
 }
 
-// ¿IP (v4/v6) que NO debe sondearse aunque la app exponga servicios internos?
-// Bloquea loopback, unspecified, link-local / metadata cloud (169.254.x, incl.
-// 169.254.169.254) y multicast. PERMITE rangos RFC1918 (10/172.16/192.168) y
-// ULA IPv6, porque exponer servicios internos de la red es el propósito de la app.
+// Is this an IP (v4/v6) that must NOT be probed even though the app exposes
+// internal services? Blocks loopback, unspecified, link-local / cloud metadata
+// (169.254.x, incl. 169.254.169.254) and multicast. ALLOWS RFC1918 ranges
+// (10/172.16/192.168) and IPv6 ULA, because exposing internal LAN services is
+// the app's purpose.
 function isDisallowedTargetIp(ip) {
-  if (typeof ip !== 'string' || !ip) return true; // ante la duda, bloquear
+  if (typeof ip !== 'string' || !ip) return true; // when in doubt, block
   let addr = ip.trim().toLowerCase().replace(/^\[|\]$/g, '').split('%')[0];
 
   // IPv6 con IPv4 mapeada (::ffff:1.2.3.4) -> validar la parte IPv4

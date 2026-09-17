@@ -14,7 +14,16 @@ jest.mock('dns', () => ({
   }),
   promises: {
     resolveMx: jest.fn(async () => [{ exchange: 'mail.example.com', priority: 10 }]),
-    resolve4: jest.fn(async () => ['127.0.0.1'])
+    resolve4: jest.fn(async () => ['127.0.0.1']),
+    // Proxy peer gate: configurable per test via global.__DNS_LOOKUP_MOCK__.
+    // By default the app_proxy hostname does NOT resolve (umbrelOS 2.x scenario,
+    // where that container no longer exists) to exercise the gateway-IP branch.
+    lookup: jest.fn(async (host, opts) => {
+      const mock = global.__DNS_LOOKUP_MOCK__;
+      if (mock === 'throw') throw new Error('ENOTFOUND');
+      if (Array.isArray(mock)) return mock;
+      throw new Error('ENOTFOUND');
+    })
   }
 }));
 
@@ -192,6 +201,100 @@ describe('api hardening', () => {
 
     jest.resetModules();
   });
+
+  test('persists the env seed as a backup and reuses it when APP_SEED disappears', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'miniweed-web-seedbk-'));
+    const prevSeed = process.env.APP_SEED;
+    const prevToken = process.env.TUNNEL_API_TOKEN;
+    const prevData = process.env.DATA_DIR;
+    const prevPort = process.env.PORT;
+    const envSeed = 'e'.repeat(64);
+    const seedPath = path.join(tempDir, 'app-seed');
+
+    process.env.DATA_DIR = tempDir;
+    process.env.PORT = '0';
+    delete process.env.TUNNEL_API_TOKEN;
+
+    process.env.APP_SEED = envSeed;
+    jest.resetModules();
+    const mod = require('../server');
+    const s1 = mod.startServer();
+    await new Promise(resolve => s1.on('listening', resolve));
+    await new Promise(resolve => s1.close(resolve));
+    if (typeof mod.stopBackgroundTimers === 'function') mod.stopBackgroundTimers();
+    expect(String(fs.readFileSync(seedPath, 'utf8')).trim()).toBe(envSeed);
+
+    // A later umbrelOS stops exporting APP_SEED: the backup keeps the app on
+    // the same seed instead of generating a new one (which would make the
+    // encrypted config unreadable).
+    delete process.env.APP_SEED;
+    jest.resetModules();
+    const mod2 = require('../server');
+    const s2 = mod2.startServer();
+    await new Promise(resolve => s2.on('listening', resolve));
+    await new Promise(resolve => s2.close(resolve));
+    if (typeof mod2.stopBackgroundTimers === 'function') mod2.stopBackgroundTimers();
+    expect(process.env.APP_SEED).toBe(envSeed);
+
+    if (prevSeed === undefined) delete process.env.APP_SEED; else process.env.APP_SEED = prevSeed;
+    if (prevToken === undefined) delete process.env.TUNNEL_API_TOKEN; else process.env.TUNNEL_API_TOKEN = prevToken;
+    if (prevData === undefined) delete process.env.DATA_DIR; else process.env.DATA_DIR = prevData;
+    if (prevPort === undefined) delete process.env.PORT; else process.env.PORT = prevPort;
+    jest.resetModules();
+  });
+
+  test('keeps the backup seed when APP_SEED changes and no longer decrypts the config', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'miniweed-web-seedrot-'));
+    const prevSeed = process.env.APP_SEED;
+    const prevToken = process.env.TUNNEL_API_TOKEN;
+    const prevData = process.env.DATA_DIR;
+    const prevPort = process.env.PORT;
+    const oldSeed = 'o'.repeat(64);
+    const newSeed = 'n'.repeat(64);
+    const seedPath = path.join(tempDir, 'app-seed');
+    const configPath = path.join(tempDir, 'config.json');
+
+    process.env.DATA_DIR = tempDir;
+    process.env.PORT = '0';
+    delete process.env.TUNNEL_API_TOKEN;
+
+    // Config encrypted with the seed in use today, plus the backup 1.7.0 writes.
+    process.env.APP_SEED = oldSeed;
+    jest.resetModules();
+    const box = require('../lib/cryptobox');
+    box.__resetForTest();
+    fs.writeFileSync(configPath, JSON.stringify({
+      _encVersion: 1,
+      domain: 'example.com',
+      privateKey: box.seal('SECRET-PRIVATE-KEY')
+    }));
+    fs.writeFileSync(seedPath, `${oldSeed}\n`, { mode: 0o600 });
+
+    // A later umbrelOS exports a differently derived APP_SEED.
+    process.env.APP_SEED = newSeed;
+    jest.resetModules();
+    // The fallback warns on stderr by design; keep the test output clean.
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const mod = require('../server');
+    const server = mod.startServer();
+    await new Promise(resolve => server.on('listening', resolve));
+
+    // The backup wins and is NOT overwritten, so the config still decrypts.
+    expect(process.env.APP_SEED).toBe(oldSeed);
+    expect(String(fs.readFileSync(seedPath, 'utf8')).trim()).toBe(oldSeed);
+    expect(mod._internals.loadConfig().privateKey).toBe('SECRET-PRIVATE-KEY');
+
+    await new Promise(resolve => server.close(resolve));
+    if (typeof mod.stopBackgroundTimers === 'function') mod.stopBackgroundTimers();
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('persisted seed backup'));
+    errSpy.mockRestore();
+
+    if (prevSeed === undefined) delete process.env.APP_SEED; else process.env.APP_SEED = prevSeed;
+    if (prevToken === undefined) delete process.env.TUNNEL_API_TOKEN; else process.env.TUNNEL_API_TOKEN = prevToken;
+    if (prevData === undefined) delete process.env.DATA_DIR; else process.env.DATA_DIR = prevData;
+    if (prevPort === undefined) delete process.env.PORT; else process.env.PORT = prevPort;
+    jest.resetModules();
+  }, 60000);
 
   test('returns script with sha for authorized call', async () => {
     const payload = JSON.stringify({
@@ -440,7 +543,7 @@ describe('api hardening', () => {
     expect(isDisallowedTargetIp('::1')).toBe(true);
     expect(isDisallowedTargetIp('fe80::1')).toBe(true);
     expect(isDisallowedTargetIp('::ffff:127.0.0.1')).toBe(true);
-    // Permitidos: servicios internos legítimos (propósito de la app).
+    // Allowed: legitimate internal services (the app's purpose).
     expect(isDisallowedTargetIp('10.0.0.5')).toBe(false);
     expect(isDisallowedTargetIp('172.18.0.3')).toBe(false);
     expect(isDisallowedTargetIp('192.168.1.10')).toBe(false);
@@ -460,7 +563,7 @@ describe('api hardening', () => {
     expect(result.error).toBe('Target blocked');
   });
 
-  // ── Caracterización de generadores (red de seguridad para el refactor) ──────
+  // ── Generator characterization (safety net for the refactor) ──────────────
 
   test('generateWgConf output (con y sin PSK)', () => {
     const mod = require('../server');
@@ -482,7 +585,7 @@ describe('api hardening', () => {
     const wgPsk = mod._internals.generateWgConf({ ...base, presharedKey: psk }, active);
     expect(wgPsk).toContain(`PresharedKey = ${psk}`);
 
-    // Sin clave privada no genera config.
+    // Without a private key it doesn't generate config.
     expect(mod._internals.generateWgConf({ ...base, privateKey: '' }, active)).toBeNull();
   });
 
@@ -514,7 +617,7 @@ describe('api hardening', () => {
   test('proxy peer gate rejects direct container peers with 403', async () => {
     const mod = require('../server');
     const { proxyPeerGate, __setProxyPeersForTest } = mod._internals;
-    __setProxyPeersForTest([], 0); // caché vacía y expirada: fail-closed
+    __setProxyPeersForTest([], 0); // empty, expired cache: fail-closed
     const res = {
       statusCode: 0,
       status(code) { this.statusCode = code; return this; },
@@ -536,6 +639,210 @@ describe('api hardening', () => {
     await proxyPeerGate({ socket: { remoteAddress: '::1' } }, res, () => { nexted += 1; });
     await proxyPeerGate({ socket: { remoteAddress: '127.0.0.1' } }, res, () => { nexted += 1; });
     expect(nexted).toBe(3);
+  });
+
+  // ── peer gate dual: umbrelOS 2.x (AppGateway en el host) ───────────────────
+
+  test('readDefaultGatewayIps parses /proc/net/route gateway (hex LE) or returns empty set', () => {
+    const mod = require('../server');
+    const { readDefaultGatewayIps } = mod._internals;
+    const ips = readDefaultGatewayIps();
+    expect(ips instanceof Set).toBe(true);
+    for (const ip of ips) {
+      expect(ip).toMatch(/^\d{1,3}(\.\d{1,3}){3}$/);
+    }
+  });
+
+  test('proxy peer gate admits the container default gateway (umbrelOS 2.x host gateway)', async () => {
+    const mod = require('../server');
+    const { proxyPeerGate, __setProxyPeersForTest } = mod._internals;
+    // On 2.x the AppGateway runs on the host: requests arrive from the gateway
+    // IP. We simulate that resolveProxyPeers already added it to the set.
+    __setProxyPeersForTest(['10.21.0.1']);
+    const res = {
+      statusCode: 0,
+      status(code) { this.statusCode = code; return this; },
+      json() { return this; }
+    };
+    let nexted = false;
+    await proxyPeerGate({ socket: { remoteAddress: '::ffff:10.21.0.1' } }, res, () => { nexted = true; });
+    expect(nexted).toBe(true);
+    expect(res.statusCode).not.toBe(403);
+  });
+
+  test('proxy peer gate still 403s arbitrary container peers on 2.x', async () => {
+    const mod = require('../server');
+    const { proxyPeerGate, __setProxyPeersForTest } = mod._internals;
+    // Gateway admitted, but another app on the shared network is not.
+    __setProxyPeersForTest(['10.21.0.1']);
+    const res = {
+      statusCode: 0,
+      status(code) { this.statusCode = code; return this; },
+      json() { return this; }
+    };
+    let nexted = false;
+    await proxyPeerGate({ socket: { remoteAddress: '::ffff:10.21.0.222' } }, res, () => { nexted = true; });
+    expect(nexted).toBe(false);
+    expect(res.statusCode).toBe(403);
+  });
+
+  test('proxy peer gate admits resolved app_proxy IP on 1.x', async () => {
+    const mod = require('../server');
+    const { proxyPeerGate, __setProxyPeersForTest } = mod._internals;
+    __setProxyPeersForTest(['172.18.0.9']);
+    const res = {
+      statusCode: 0,
+      status(code) { this.statusCode = code; return this; },
+      json() { return this; }
+    };
+    let nexted = false;
+    await proxyPeerGate({ socket: { remoteAddress: '::ffff:172.18.0.9' } }, res, () => { nexted = true; });
+    expect(nexted).toBe(true);
+  });
+
+  test('proxy peers resolver unions gateway IPs with DNS results and is fail-closed', async () => {
+    const mod = require('../server');
+    const { readDefaultGatewayIps, resolveProxyPeers, __setProxyPeersForTest } = mod._internals;
+    const gateways = readDefaultGatewayIps();
+    // Force expiry and real re-resolution (DNS fails, gateways must come in).
+    __setProxyPeersForTest([], 0);
+    const peers = await resolveProxyPeers(true);
+    // System-read gateways (if any) are part of the valid peers.
+    for (const gw of gateways) {
+      expect(peers.has(gw)).toBe(true);
+    }
+  });
+
+  test('proxy peers resolver never inherits stale IPs from previous resolutions', async () => {
+    const mod = require('../server');
+    const { proxyPeerGate, resolveProxyPeers, __setProxyPeersForTest } = mod._internals;
+    // Cache "poisoned" with the app_proxy's old IP (Docker will recycle it to
+    // another app). On expiry, re-resolution must NOT inherit it.
+    __setProxyPeersForTest(['172.18.0.55'], 0);
+    global.__DNS_LOOKUP_MOCK__ = [{ address: '172.18.0.9', family: 4 }];
+    const peers = await resolveProxyPeers(true);
+    expect(peers.has('172.18.0.55')).toBe(false);
+    expect(peers.has('172.18.0.9')).toBe(true);
+    // And the gate rejects the recycled IP even though it was once legitimate.
+    const res = {
+      statusCode: 0,
+      status(code) { this.statusCode = code; return this; },
+      json() { return this; }
+    };
+    let nexted = false;
+    await proxyPeerGate({ socket: { remoteAddress: '::ffff:172.18.0.55' } }, res, () => { nexted = true; });
+    expect(nexted).toBe(false);
+    expect(res.statusCode).toBe(403);
+    delete global.__DNS_LOOKUP_MOCK__;
+  });
+
+  // ── host gateway on umbrelOS 1.x: widget only ──────────────────────────────
+
+  function fakeRes() {
+    return {
+      statusCode: 0,
+      status(code) { this.statusCode = code; return this; },
+      json() { return this; }
+    };
+  }
+
+  test('1.x (app_proxy seen): host gateway may only fetch the widget, never the UI or API', async () => {
+    const mod = require('../server');
+    const { proxyPeerGate, __setProxyPeersForTest, __setAppProxySeenForTest } = mod._internals;
+    __setProxyPeersForTest(['172.18.0.9'], Date.now(), ['10.21.0.1']);
+    __setAppProxySeenForTest(true);
+    try {
+      const fromHost = (method, reqPath) => ({ method, path: reqPath, socket: { remoteAddress: '::ffff:10.21.0.1' } });
+      // A network_mode: host container shares the host's bridge IP: it must not
+      // get the admin cookie from `/` nor reach the API.
+      let res = fakeRes(); let nexted = false;
+      await proxyPeerGate(fromHost('GET', '/'), res, () => { nexted = true; });
+      expect(nexted).toBe(false); expect(res.statusCode).toBe(403);
+
+      res = fakeRes(); nexted = false;
+      await proxyPeerGate(fromHost('POST', '/api/config'), res, () => { nexted = true; });
+      expect(nexted).toBe(false); expect(res.statusCode).toBe(403);
+
+      // umbreld's server-side widget fetch is the one legitimate host request.
+      res = fakeRes(); nexted = false;
+      await proxyPeerGate(fromHost('GET', '/api/widget'), res, () => { nexted = true; });
+      expect(nexted).toBe(true); expect(res.statusCode).not.toBe(403);
+
+      // The UI keeps arriving through app_proxy, unaffected.
+      res = fakeRes(); nexted = false;
+      await proxyPeerGate({ method: 'GET', path: '/', socket: { remoteAddress: '::ffff:172.18.0.9' } }, res, () => { nexted = true; });
+      expect(nexted).toBe(true);
+    } finally {
+      __setAppProxySeenForTest(false);
+    }
+  });
+
+  test('2.x (app_proxy never seen): host gateway is the AppGateway and is trusted for everything', async () => {
+    const mod = require('../server');
+    const { proxyPeerGate, __setProxyPeersForTest, __setAppProxySeenForTest } = mod._internals;
+    __setProxyPeersForTest([], Date.now(), ['10.21.0.1']);
+    __setAppProxySeenForTest(false);
+    const res = fakeRes(); let nexted = false;
+    await proxyPeerGate({ method: 'GET', path: '/', socket: { remoteAddress: '::ffff:10.21.0.1' } }, res, () => { nexted = true; });
+    expect(nexted).toBe(true);
+  });
+
+  test('app_proxy marker is sticky: a later DNS failure does not downgrade the gate to 2.x mode', async () => {
+    const mod = require('../server');
+    const { resolveProxyPeers, __setProxyPeersForTest, __setAppProxySeenForTest, __getAppProxySeenForTest } = mod._internals;
+    __setAppProxySeenForTest(false);
+    try {
+      __setProxyPeersForTest([], 0);
+      global.__DNS_LOOKUP_MOCK__ = [{ address: '172.18.0.9', family: 4 }];
+      await resolveProxyPeers(true);
+      expect(__getAppProxySeenForTest()).toBe(true);
+      // app_proxy restarting / transient DNS failure: the marker must survive.
+      __setProxyPeersForTest([], 0);
+      global.__DNS_LOOKUP_MOCK__ = 'throw';
+      const peers = await resolveProxyPeers(true);
+      expect(peers.has('172.18.0.9')).toBe(false);
+      expect(__getAppProxySeenForTest()).toBe(true);
+    } finally {
+      delete global.__DNS_LOOKUP_MOCK__;
+      __setAppProxySeenForTest(false);
+    }
+  });
+
+  test('GET /api/config masks the preshared key and "••••" keeps it on POST', async () => {
+    const auth = { 'Content-Type': 'application/json', 'x-tunnel-api-token': token };
+    const psk = 'C'.repeat(43) + '=';
+    await req(port, 'POST', '/api/config', JSON.stringify({
+      privateKey: 'A'.repeat(43) + '=',
+      publicKey: 'B'.repeat(43) + '=',
+      presharedKey: psk,
+      services: []
+    }), auth);
+    let r = await req(port, 'GET', '/api/config', null, auth);
+    expect(r.status).toBe(200);
+    expect(r.body).not.toContain(psk);
+    expect(JSON.parse(r.body).presharedKey).toBe('••••');
+    // Round-tripping the masked value must not wipe the stored key.
+    await req(port, 'POST', '/api/config', JSON.stringify({ presharedKey: '••••', services: [] }), auth);
+    r = await req(port, 'GET', '/api/config', null, auth);
+    expect(JSON.parse(r.body).presharedKey).toBe('••••');
+    const cfg = JSON.parse(fs.readFileSync(path.join(tmpDir, 'config.json'), 'utf8'));
+    expect(typeof cfg.presharedKey).toBe('object'); // sealed blob, still present
+  });
+
+  // ── widget (umbrelOS 2.x) ───────────────────────────────────────────────────
+
+  test('widget endpoint is unauthenticated and never leaks secrets', async () => {
+    const r = await req(port, 'GET', '/api/widget');
+    expect(r.status).toBe(200);
+    const body = JSON.parse(r.body);
+    expect(body.type).toBe('three-stats');
+    expect(Array.isArray(body.items)).toBe(true);
+    expect(body.items.length).toBe(3);
+    // No secretos ni material sensible en el widget.
+    const raw = r.body;
+    expect(raw).not.toContain('privateKey');
+    expect(raw).not.toContain('presharedKey');
+    expect(raw).not.toContain(token);
   });
 
   test('status and health endpoints require auth', async () => {
@@ -589,8 +896,8 @@ describe('api hardening', () => {
     expect(saved.status).toBe(200);
     const st = fs.statSync(path.join(tmpDir, 'wg', 'wg0.conf'));
     expect(st.mode & 0o777).toBe(0o600);
-    // La raíz de /data ya no debe contener wg0.conf: el contenedor wg solo
-    // monta el subdir wg/.
+    // The /data root must no longer contain wg0.conf: the wg container only
+    // mounts the wg/ subdir.
     expect(fs.existsSync(path.join(tmpDir, 'wg0.conf'))).toBe(false);
   });
 
@@ -645,9 +952,9 @@ describe('api hardening', () => {
     if (prevPort === undefined) delete process.env.PORT; else process.env.PORT = prevPort;
   });
 
-  // ── Regresiones de la auditoría de seguridad ────────────────────────────────
+  // ── Security-audit regressions ────────────────────────────────────────────
 
-  test('la migración v0->v1 cifra y elimina el backup en claro (M1)', async () => {
+  test('v0->v1 migration encrypts and removes the plaintext backup (M1)', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'miniweed-web-cfgmig-'));
     const prevData = process.env.DATA_DIR;
     const prevPort = process.env.PORT;
@@ -668,7 +975,7 @@ describe('api hardening', () => {
     await new Promise(resolve => s1.close(resolve));
     if (typeof mod.stopBackgroundTimers === 'function') mod.stopBackgroundTimers();
 
-    // Sin backup en claro y config migrado a v1 cifrado.
+    // No plaintext backup left and config migrated to encrypted v1.
     expect(fs.existsSync(path.join(tempDir, 'config.json.v0.bak'))).toBe(false);
     const migrated = JSON.parse(fs.readFileSync(path.join(tempDir, 'config.json'), 'utf8'));
     expect(migrated._encVersion).toBe(1);
@@ -697,12 +1004,12 @@ describe('api hardening', () => {
     expect(r.body).not.toContain('__TUNNEL_API_TOKEN__');
   });
 
-  test('los generadores sanea claves WireGuard inválidas (B2 defense in depth)', () => {
+  test('generators sanitize invalid WireGuard keys (B2 defense in depth)', () => {
     const mod = require('../server');
     const valid = 'A'.repeat(43) + '=';
     const target = { id: 'vps-a', name: 'A', ip: '203.0.113.7', port: 51820 };
 
-    // PSK inválida -> se omite; nunca se interpola en el bash que corre como root.
+    // Invalid PSK -> omitted; never interpolated into the bash run as root.
     const script = mod._internals.generateVpsScript(
       { publicKey: valid, presharedKey: 'evil\nrm -rf /', tunnelClientIp: '10.8.0.2', tunnelServerIp: '10.8.0.1' },
       target
@@ -710,10 +1017,10 @@ describe('api hardening', () => {
     expect(script).not.toContain('rm -rf');
     expect(script).not.toContain('PresharedKey = evil');
 
-    // Clave pública inválida -> fail-closed (no se genera un script roto).
+    // Invalid public key -> fail-closed (no broken script is generated).
     expect(() => mod._internals.generateVpsScript({ publicKey: 'evil; rm -rf /' }, target)).toThrow();
 
-    // wg0.conf: claves inválidas -> null; PSK inválida -> línea omitida.
+    // wg0.conf: invalid keys -> null; invalid PSK -> line omitted.
     const active = { ...target, pubKey: valid };
     expect(mod._internals.generateWgConf(
       { privateKey: 'evil\nrm -rf /', tunnelClientIp: '10.8.0.2', tunnelServerIp: '10.8.0.1' },

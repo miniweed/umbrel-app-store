@@ -11,7 +11,7 @@ HTTPS with Let's Encrypt).
             HTTPS (443)                WireGuard tunnel
  Internet ───────────────►  VPS  ◄════════════════════►  Umbrel
  user                    (public IP)                    (Caddy + your apps)
-                          Caddy/iptables                reverse_proxy → app
+                          iptables                      reverse_proxy → app
 ```
 
 1. The app generates a WireGuard key pair on your Umbrel.
@@ -23,6 +23,26 @@ HTTPS with Let's Encrypt).
 
 Your Umbrel never opens a port on your home router; all inbound traffic enters
 through the VPS and travels the encrypted tunnel.
+
+## umbrelOS 2.0 and HTTPS
+
+umbrelOS 2.0 introduced **automatic HTTPS for your local network**: the dashboard
+and apps are served over `https://umbrel.local` with a private, self-signed
+certificate authority that you install on your devices. That protects traffic on
+your LAN and over VPNs like Tailscale.
+
+Tunnel solves a different problem: **public HTTPS on your own domain**, reachable
+from anywhere on the internet with certificates trusted by every browser (Let's
+Encrypt). umbrelOS 2.0's local HTTPS does not expose services publicly and does
+not issue publicly trusted certificates — Tunnel still does.
+
+Tunnel is compatible with both umbrelOS 1.x and 2.x:
+- On **1.x**, the management UI is fronted by Umbrel's `app_proxy` container.
+- On **2.x**, the `app_proxy` container no longer exists; umbreld runs the app
+  gateway in-process on the host. The app detects and trusts the host gateway
+  automatically, and adds a home-screen widget showing tunnel status.
+- On 1.x the host IP is only allowed to fetch the widget; the UI and API keep
+  requiring `app_proxy`, exactly as before.
 
 ## Requirements
 
@@ -76,16 +96,16 @@ over HTTPS (the certificate is issued automatically on first request).
 - **Automatic HTTPS** for each exposed service via Caddy + Let's Encrypt.
 - **Per-service health checks** shown in the dashboard.
 - **In-app instructions** tab guiding you through the whole setup.
+- **Home-screen widget** (umbrelOS 2.x) showing tunnel status at a glance.
 
 Access to the panel is protected by your Umbrel account (the app runs behind
-Umbrel's authenticated app proxy).
+Umbrel's authenticated app gateway).
 
 ## Security
 
 - **Trust boundaries:** on Umbrel the app is sandboxed (`web` drops all
-  capabilities; only the `wg` container needs `NET_ADMIN`/`SYS_MODULE` for
-  WireGuard, like the official Tailscale app). The root setup script runs only on
-  *your own VPS*, never on the Umbrel host.
+  capabilities; only the `wg` container needs `NET_ADMIN` for WireGuard). The
+  root setup script runs only on *your own VPS*, never on the Umbrel host.
 - WireGuard end-to-end encryption; the VPS only forwards encrypted traffic.
 - The generated VPS script is built **only from your distro's packages** (no remote
   code), is deterministic, prints a SHA-256 you can verify, hardens SSH (with
@@ -100,9 +120,7 @@ See [SECURITY.md](SECURITY.md) for the full trust model and how to report issues
 
 - `web/` — Node/Express API + Preact UI (the app image).
 - `wg-client/` — WireGuard client container + minimal control API.
-- `vps-setup/` — helper scripts and runbooks for the VPS side.
-- `miniweed-tunnel/` packaging (`umbrel-app.yml`, `docker-compose.yml`) for the
-  Umbrel community app store.
+- `docker-compose.yml`, `umbrel-app.yml`, `exports.sh` — Umbrel app packaging.
 
 ## Development
 

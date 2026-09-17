@@ -2,7 +2,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// lib/audit fija AUDIT_PATH a DATA_DIR en tiempo de carga: preparamos el dir antes.
+// lib/audit pins AUDIT_PATH to DATA_DIR at load time: prepare the dir first.
 function freshAudit() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mw-audit-'));
   process.env.DATA_DIR = dir;
@@ -17,7 +17,7 @@ describe('audit hash chain', () => {
     else process.env.DATA_DIR = prevDataDir;
   });
 
-  test('cadena válida verifica ok', () => {
+  test('valid chain verifies ok', () => {
     const { dir, audit } = freshAudit();
     audit.log({ action: 'a' });
     audit.log({ action: 'b' });
@@ -29,14 +29,14 @@ describe('audit hash chain', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  test('detecta manipulación de una entrada', () => {
+  test('detects tampering with an entry', () => {
     const { dir, audit } = freshAudit();
     audit.log({ action: 'login', user: 'a' });
     audit.log({ action: 'login', user: 'b' });
     const auditPath = path.join(dir, 'audit.log');
     const lines = fs.readFileSync(auditPath, 'utf8').trim().split('\n');
     const tampered = JSON.parse(lines[0]);
-    tampered.user = 'atacante'; // cambia el contenido sin recalcular el hash
+    tampered.user = 'attacker'; // changes the content without recomputing the hash
     lines[0] = JSON.stringify(tampered);
     fs.writeFileSync(auditPath, lines.join('\n') + '\n');
 
@@ -47,14 +47,14 @@ describe('audit hash chain', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  test('detecta eliminación de una entrada (rompe prevHash)', () => {
+  test('detects deletion of an entry (breaks prevHash)', () => {
     const { dir, audit } = freshAudit();
     audit.log({ action: '1' });
     audit.log({ action: '2' });
     audit.log({ action: '3' });
     const auditPath = path.join(dir, 'audit.log');
     const lines = fs.readFileSync(auditPath, 'utf8').trim().split('\n');
-    // Elimina la segunda entrada: la tercera deja de encadenar con la primera.
+    // Removes the second entry: the third one no longer chains to the first.
     fs.writeFileSync(auditPath, [lines[0], lines[2]].join('\n') + '\n');
 
     const result = audit.verifyChain();
@@ -63,19 +63,19 @@ describe('audit hash chain', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  test('la rotación reinicia la cadena: verifyChain no da falso positivo', () => {
+  test('rotation restarts the chain: verifyChain gives no false positive', () => {
     const { dir, audit } = freshAudit();
-    audit.log({ action: 'pre-rotacion' });
+    audit.log({ action: 'pre-rotation' });
     const auditPath = path.join(dir, 'audit.log');
-    // Infla el archivo por encima de MAX_SIZE sin pasar por log() (no toca lastHash).
+    // Inflate the file beyond MAX_SIZE bypassing log() (doesn't touch lastHash).
     fs.appendFileSync(auditPath, 'x'.repeat(11 * 1024 * 1024));
-    audit.log({ action: 'post-rotacion' }); // dispara la rotación
+    audit.log({ action: 'post-rotation' }); // triggers the rotation
 
     expect(fs.existsSync(`${auditPath}.1`)).toBe(true);
     const result = audit.verifyChain();
     expect(result.ok).toBe(true);
     expect(result.entries).toBe(1);
-    // El archivo nuevo arranca con prevHash génesis.
+    // The new file starts with a genesis prevHash.
     const first = JSON.parse(fs.readFileSync(auditPath, 'utf8').trim().split('\n')[0]);
     expect(first.prevHash).toBe('0'.repeat(64));
     fs.rmSync(dir, { recursive: true, force: true });

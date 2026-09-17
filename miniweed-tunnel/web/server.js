@@ -26,7 +26,7 @@ const {
   generateCaddyfile,
   generateVpsScript
 } = require('./lib/generators');
-const { seal, open, isSealed } = require('./lib/cryptobox');
+const { seal, open, isSealed, canOpenWith } = require('./lib/cryptobox');
 const audit = require('./lib/audit');
 
 const {
@@ -54,15 +54,29 @@ let configLock = Promise.resolve();
 let ADMIN_TOKEN = '';
 
 // ── proxy peer gate ──────────────────────────────────────────────────────────
-// Umbrel corre todos los contenedores de apps en una red Docker compartida, así
-// que web:3016 es alcanzable por contenedores de otras apps. El único cliente
-// legítimo es el app_proxy de esta app (que impone la sesión de Umbrel vía
-// PROXY_AUTH_ADD) y loopback (procesos del propio contenedor). Cualquier otro
-// peer recibe 403 antes de tocar rutas o estáticos: nunca ve el token admin.
+// Umbrel runs all app containers on a shared Docker network, so web:3016 is
+// reachable from other apps' containers. The only legitimate clients are
+// Umbrel's app gateway (which enforces the Umbrel session) and loopback
+// (processes inside this container). Any other peer gets a 403 before touching
+// routes or statics: it never sees the admin token.
+//
+// Dual umbrelOS 1.x / 2.x compat:
+//  - 1.x: the gateway is the app_proxy container → we resolve APP_PROXY_HOST.
+//  - 2.x: the app_proxy container no longer exists; umbreld runs the AppGateway
+//    in-process on the HOST, so requests arrive from the host IP on the bridge
+//    network, which is exactly this container's default gateway.
 const APP_PROXY_HOST = process.env.APP_PROXY_HOST || 'miniweed-tunnel_app_proxy_1';
 const PROXY_PEER_TTL_MS = 30_000;
 const PROXY_PEER_MIN_RESOLVE_GAP_MS = 1_000;
-let proxyPeers = { ips: new Set(), resolvedAt: 0 };
+// `ips` is the full admitted set; `gateways` is the subset that came from the
+// routing table (host IP), kept apart so the gate can restrict it on 1.x.
+let proxyPeers = { ips: new Set(), gateways: new Set(), resolvedAt: 0 };
+// Sticky umbrelOS 1.x marker: set the first time APP_PROXY_HOST resolves after
+// boot. Only 1.x has that container (2.x's legacy-compat drops it from the
+// compose), so once seen this process is on 1.x for its whole lifetime — a
+// later app_proxy restart or DNS hiccup must not silently switch the gate to
+// 2.x mode, where the host IP is trusted for everything.
+let appProxySeen = false;
 
 function normalizePeerIp(addr) {
   const ip = String(addr || '').trim().toLowerCase();
@@ -74,19 +88,67 @@ function isLoopbackPeer(ip) {
   return ip === '::1' || ip.startsWith('127.');
 }
 
+// Default gateway of the container's default interface, read from
+// /proc/net/route (destination 00000000, gateway hex little-endian). On
+// umbrelOS 2.x that IP is the host's address on umbrel_main_network: legitimate
+// requests from the in-process AppGateway and umbreld's server-side widgets
+// arrive from there. On 1.x it additionally admits the host IP, which is
+// already a trusted domain (the gate exists to block the OTHER containers on
+// the shared network).
+function readDefaultGatewayIps() {
+  const ips = new Set();
+  try {
+    const lines = fs.readFileSync('/proc/net/route', 'utf8').split('\n').slice(1);
+    for (const line of lines) {
+      const fields = line.trim().split(/\s+/);
+      if (fields.length < 3) continue;
+      const destination = fields[1];
+      const gatewayHex = fields[2];
+      if (destination !== '00000000' || gatewayHex === '00000000') continue;
+      const m = gatewayHex.match(/^([0-9A-Fa-f]{8})$/);
+      if (!m) continue;
+      const raw = Buffer.from(m[1], 'hex');
+      ips.add(`${raw[3]}.${raw[2]}.${raw[1]}.${raw[0]}`);
+    }
+  } catch {
+    // No /proc/net/route (tests, non-Linux environments): return the empty set.
+  }
+  return ips;
+}
+
 async function resolveProxyPeers(force = false) {
   const now = Date.now();
   const fresh = now - proxyPeers.resolvedAt < PROXY_PEER_TTL_MS;
   const tooSoon = now - proxyPeers.resolvedAt < PROXY_PEER_MIN_RESOLVE_GAP_MS;
   if ((fresh && !force) || (force && tooSoon)) return proxyPeers.ips;
+
+  // The set is rebuilt from scratch on every resolution: IPs from previous
+  // resolutions are never inherited. An IP the app_proxy once held expires with
+  // the TTL (30s) — essential because Docker recycles pool IPs to other apps'
+  // containers.
+  const next = new Set();
+  // Host IP on the bridge network: umbreld's in-process AppGateway on 2.x, and
+  // umbreld's server-side widget fetch on both 1.x and 2.x.
+  const gateways = readDefaultGatewayIps();
+  for (const gw of gateways) next.add(gw);
+  // umbrelOS 1.x: the app_proxy container. On 2.x the name does not exist and
+  // the lookup fails: the set keeps only the gateways (enough on 2.x; on 1.x
+  // the gate restricts them to the widget, see proxyPeerGate).
   try {
     const addrs = await dns.promises.lookup(APP_PROXY_HOST, { all: true });
-    proxyPeers = { ips: new Set(addrs.map(a => normalizePeerIp(a.address))), resolvedAt: now };
+    for (const a of addrs) next.add(normalizePeerIp(a.address));
+    if (addrs.length) appProxySeen = true;
   } catch {
-    // Fail-closed: sin resolución no se admite ningún peer nuevo.
-    proxyPeers = { ips: proxyPeers.ips, resolvedAt: now };
+    // Fail-closed: without resolution no new peer is admitted via DNS.
   }
+  proxyPeers = { ips: next, gateways, resolvedAt: now };
   return proxyPeers.ips;
+}
+
+// The only request umbreld itself makes straight to the container (widgets are
+// fetched server-side from the host). It is unauthenticated and secret-free.
+function isWidgetRequest(req) {
+  return (req.method === 'GET' || req.method === 'HEAD') && req.path === '/api/widget';
 }
 
 async function proxyPeerGate(req, res, next) {
@@ -94,11 +156,20 @@ async function proxyPeerGate(req, res, next) {
   if (isLoopbackPeer(peer)) return next();
   let allowed = await resolveProxyPeers();
   if (!allowed.has(peer)) {
-    // El app_proxy puede haberse reiniciado con otra IP: re-resuelve antes de negar.
+    // The app_proxy may have restarted with a different IP: re-resolve before denying.
     allowed = await resolveProxyPeers(true);
   }
-  if (allowed.has(peer)) return next();
-  return res.status(403).json({ error: 'Forbidden' });
+  if (!allowed.has(peer)) return res.status(403).json({ error: 'Forbidden' });
+  // On 1.x the UI always arrives via app_proxy, so the host IP is legitimate
+  // ONLY for umbreld's widget fetch. Anything else from that IP is another
+  // container on the host network (network_mode: host apps share the host's
+  // bridge address), which must not receive the admin cookie — same boundary
+  // as 1.6.50. On 2.x (app_proxy never seen) the in-process AppGateway is the
+  // host IP and has to be trusted for everything.
+  if (appProxySeen && proxyPeers.gateways.has(peer) && !isWidgetRequest(req)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  return next();
 }
 
 app.use((req, res, next) => { proxyPeerGate(req, res, next).catch(next); });
@@ -121,9 +192,9 @@ app.use((req, res, next) => {
   next();
 });
 
-// El conteo usa siempre el peer TCP real (authClientIp), no falsificable vía
-// X-Forwarded-For: sin esto un cliente podría resetear su bucket (o envenenar
-// el audit log) simplemente cambiando la cabecera en cada petición.
+// Counting always uses the real TCP peer (authClientIp), not spoofable via
+// X-Forwarded-For: without this a client could reset its bucket (or poison the
+// audit log) simply by changing the header on each request.
 const rateBuckets = {
   default: { max: 120, windowMs: 60_000 },
   '/api/keygen': { max: 5, windowMs: 3_600_000 },
@@ -142,8 +213,8 @@ function withConfigLock(fn) {
 }
 
 // Real TCP peer IP (not spoofable via X-Forwarded-For) for rate limiting and
-// audit trails. Deliberadamente no se usa `trust proxy`: el único salto
-// confiable es el app_proxy y su identidad ya la garantiza el proxy peer gate.
+// audit trails. `trust proxy` is deliberately not used: the only trusted hop
+// is the app gateway and its identity is already guaranteed by the peer gate.
 function authClientIp(req) {
   return req.socket?.remoteAddress || req.ip || 'unknown';
 }
@@ -260,14 +331,6 @@ function ensureDataDir() {
     fs.mkdirSync(path.dirname(WG_CONF), { recursive: true });
   } catch (err) {
     console.error(`[warn] could not prepare data dir ${DATA_DIR}: ${err.message}`);
-    return;
-  }
-  if (!fs.existsSync(CADDYFILE)) {
-    try {
-      fs.writeFileSync(CADDYFILE, DEFAULT_CADDYFILE);
-    } catch (err) {
-      console.error(`[warn] could not initialize ${CADDYFILE}: ${err.message}`);
-    }
   }
 }
 
@@ -310,10 +373,10 @@ function migrateConfigIfNeeded() {
     fs.copyFileSync(CONFIG_FILE, backup);
     fs.chmodSync(backup, 0o600);
     saveConfig(raw || {});
-    // El backup contiene la clave privada en claro: conservarlo anularía el
-    // cifrado en reposo. Solo se borra tras escribir la v1 cifrada con éxito;
-    // si saveConfig lanza, el .bak queda como red de seguridad y el original
-    // sigue intacto (saveConfig escribe tmp + rename atómico).
+    // The backup contains the plaintext private key: keeping it would defeat
+    // at-rest encryption. It is only deleted after the encrypted v1 is written
+    // successfully; if saveConfig throws, the .bak stays as a safety net and
+    // the original remains intact (saveConfig writes tmp + atomic rename).
     fs.unlinkSync(backup);
     console.log('[migration] config.json encrypted v0 -> v1 (plaintext backup removed)');
   } catch (err) {
@@ -321,16 +384,16 @@ function migrateConfigIfNeeded() {
   }
 }
 
-// Hasta 1.6.48 wg0.conf vivía en la raíz de DATA_DIR; ahora vive en DATA_DIR/wg
-// porque el contenedor wg solo monta ese subdir. Mueve el conf existente para
-// que un update no deje al túnel esperando una config que ya estaba escrita.
+// Until 1.6.48 wg0.conf lived at the DATA_DIR root; it now lives in DATA_DIR/wg
+// because the wg container only mounts that subdir. Moves the existing conf so
+// an update doesn't leave the tunnel waiting for a config that was already written.
 function migrateWgConfIfNeeded() {
   try {
     if (!fs.existsSync(LEGACY_WG_CONF)) return;
     if (!fs.existsSync(WG_CONF)) {
-      // Copia en lugar de rename: el archivo nuevo queda con el owner de este
-      // proceso, para que el contenedor wg (sin DAC_OVERRIDE) pueda leerlo
-      // aunque el legacy tuviera otro dueño.
+      // Copy instead of rename: the new file gets this process's owner, so the
+      // wg container (no DAC_OVERRIDE) can read it even if the legacy file had
+      // a different owner.
       writePrivateFile(WG_CONF, fs.readFileSync(LEGACY_WG_CONF));
       console.log('[migration] wg0.conf moved to wg/ subdir');
     } else {
@@ -342,26 +405,93 @@ function migrateWgConfIfNeeded() {
   }
 }
 
-function loadOrCreateAppSeed() {
-  const envSeed = (process.env.APP_SEED || process.env.TUNNEL_API_TOKEN || '').trim();
-  if (envSeed.length >= 32) return envSeed;
-
-  if (fs.existsSync(APP_SEED_FILE)) {
-    try {
-      const stored = String(fs.readFileSync(APP_SEED_FILE, 'utf8') || '').trim();
-      if (stored.length >= 32) return stored;
-    } catch {
-      // Continue to regeneration path.
-    }
-  }
-
-  const generated = crypto.randomBytes(48).toString('base64url');
+function readStoredAppSeed() {
   try {
-    fs.writeFileSync(APP_SEED_FILE, `${generated}\n`, { mode: 0o600 });
+    if (!fs.existsSync(APP_SEED_FILE)) return '';
+    return String(fs.readFileSync(APP_SEED_FILE, 'utf8') || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function persistAppSeed(seed) {
+  try {
+    fs.writeFileSync(APP_SEED_FILE, `${seed}\n`, { mode: 0o600 });
   } catch (err) {
     console.error(`[warn] could not persist app seed: ${err.message}`);
   }
+}
+
+// Any sealed blob from the stored config, used as a probe to tell which seed the
+// config was encrypted with. Returns null when there is no config yet or nothing
+// in it is sealed (nothing to lose, so either seed is fine).
+function findSealedProbe() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    for (const f of ENCRYPTED_FIELDS) {
+      if (isSealed(raw[f])) return raw[f];
+    }
+    if (Array.isArray(raw.services)) {
+      for (const svc of raw.services) {
+        if (svc && isSealed(svc.target)) return svc.target;
+      }
+    }
+  } catch {
+    // No config, unreadable, or not JSON: no probe available.
+  }
+  return null;
+}
+
+function loadOrCreateAppSeed() {
+  const envSeed = (process.env.APP_SEED || process.env.TUNNEL_API_TOKEN || '').trim();
+  const stored = readStoredAppSeed();
+
+  if (envSeed.length >= 32) {
+    // Persist the effective seed as a backup so the config survives an umbrelOS
+    // version that stops exporting APP_SEED altogether (the fallback below then
+    // reads it back from disk).
+    if (stored === envSeed) return envSeed;
+    if (stored.length < 32) {
+      persistAppSeed(envSeed);
+      return envSeed;
+    }
+
+    // env and backup disagree: umbrelOS may have changed the APP_SEED
+    // derivation. Overwriting the backup here would destroy the only copy of
+    // the seed config.json was encrypted with, so check which one actually
+    // opens it before touching the file.
+    const probe = findSealedProbe();
+    if (probe && !canOpenWith(envSeed, probe) && canOpenWith(stored, probe)) {
+      console.error('[warn] APP_SEED changed and does not decrypt config.json; ' +
+        'falling back to the persisted seed backup');
+      return stored;
+    }
+    persistAppSeed(envSeed);
+    return envSeed;
+  }
+
+  if (stored.length >= 32) return stored;
+
+  const generated = crypto.randomBytes(48).toString('base64url');
+  persistAppSeed(generated);
   return generated;
+}
+
+// After a backup restore the Caddyfile may be missing (caddy/data is in
+// backupIgnore) or still hold the placeholder while config.json was restored.
+// Regenerate it from the config so Caddy never starts stuck on the placeholder.
+function regenerateCaddyfileFromConfig() {
+  try {
+    const cfg = loadConfig();
+    if (cfg && cfg.domain) {
+      fs.writeFileSync(CADDYFILE, generateCaddyfile(cfg));
+      console.log('[startup] Caddyfile (re)generated from saved config');
+    } else if (!fs.existsSync(CADDYFILE)) {
+      fs.writeFileSync(CADDYFILE, DEFAULT_CADDYFILE);
+    }
+  } catch (err) {
+    console.error(`[warn] could not regenerate Caddyfile from config: ${err.message}`);
+  }
 }
 
 function loadConfig() {
@@ -381,7 +511,7 @@ function saveConfig(cfg) {
   fs.renameSync(tmp, CONFIG_FILE);
 }
 
-// mode solo aplica al crear el archivo; el chmod cubre archivos preexistentes.
+// mode only applies when creating the file; chmod covers pre-existing files.
 function writePrivateFile(file, data) {
   fs.writeFileSync(file, data, { mode: 0o600 });
   try { fs.chmodSync(file, 0o600); } catch {}
@@ -405,8 +535,8 @@ function getActiveVpsTarget(cfg) {
 }
 
 
-// Envuelve handlers async para que un rechazo vaya a next(err) en vez de colgar
-// la request (Express 4 no captura rejections de funciones async por sí solo).
+// Wraps async handlers so a rejection goes to next(err) instead of hanging
+// the request (Express 4 doesn't catch async function rejections by itself).
 function asyncHandler(fn) {
   return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 }
@@ -432,7 +562,7 @@ function probeServiceTarget(target, timeoutMs = 4000) {
 
     const hostname = parsed.hostname.replace(/^\[|\]$/g, '');
     // Resuelve el host y rechaza si apunta a loopback/metadata (anti-SSRF + anti-rebinding).
-    // No bloquea RFC1918: exponer servicios internos es el propósito de la app.
+    // Doesn't block RFC1918: exposing internal services is the app's purpose.
     dns.lookup(hostname, { all: true }, (err, addresses) => {
       if (err || !addresses || addresses.length === 0) {
         return resolve({ ok: false, error: 'Not resolvable' });
@@ -452,10 +582,10 @@ function probeServiceTarget(target, timeoutMs = 4000) {
           path: '/',
           method: 'GET',
           timeout: timeoutMs,
-          // Fija la IP ya validada: evita que un segundo lookup (rebinding) apunte a otra IP.
+          // Pins the already-validated IP: prevents a second lookup (rebinding) from pointing elsewhere.
           lookup: (_host, _opts, cb) => cb(null, pinned.address, pinned.family),
           servername: hostname,
-          // Servicios internos suelen usar certs autofirmados; el probe solo mide alcance.
+          // Internal services often use self-signed certs; the probe only measures reachability.
           rejectUnauthorized: false
         },
         res => {
@@ -545,7 +675,7 @@ function validateConfig(cfg) {
   if (cfg.vpsPubKey && !isWireGuardKey(cfg.vpsPubKey)) {
     errors.push('The VPS public key is invalid');
   }
-  // Misma semántica que el schema zod de entrada: solo IPv4 estricta.
+  // Same semantics as the input zod schema: strict IPv4 only.
   if (cfg.vpsIp && !isValidIpv4(cfg.vpsIp)) {
     errors.push('The VPS IP is invalid');
   }
@@ -644,17 +774,56 @@ function wgApi(urlPath) {
   });
 }
 
+// ── widget (umbrelOS 2.x home screen) ────────────────────────────────────────
+// Unauthenticated, secret-free endpoint: umbreld fetches it server-side
+// straight to the container (http://web:3016/api/widget) and the peer gate
+// already protects it from other apps. It runs without auth (but shares the
+// default /api rate-limit bucket, with the gateway IP as its only client: UI
+// and widget consume the same bucket, with no practical impact) so umbreld
+// doesn't need cookies. Returns the umbrelOS `three-stats` shape.
+app.get('/api/widget', asyncHandler(async (req, res) => {
+  const cfg = loadConfig();
+  const services = Array.isArray(cfg.services) ? cfg.services : [];
+  const enabled = services.filter(s => s.enabled && s.target);
+  const health = cfg.serviceHealth || {};
+  const healthy = enabled.filter(s => health[serviceKey(s)] && health[serviceKey(s)].ok).length;
+
+  let wg = { connected: false, lastHandshakeAgeSec: null };
+  try { wg = await wgApi('/status'); } catch { /* wg down: widget degrades */ }
+
+  let tunnelText = 'Not connected';
+  let tunnelSub = 'no handshake';
+  if (wg && wg.connected) {
+    tunnelText = 'Connected';
+    const age = wg.lastHandshakeAgeSec;
+    tunnelSub = (typeof age === 'number' && age >= 0) ? `handshake ${age}s ago` : 'wireguard up';
+  }
+
+  res.json({
+    type: 'three-stats',
+    link: '',
+    items: [
+      { icon: 'route', text: tunnelText, subtext: tunnelSub },
+      { icon: 'server-2', text: `${healthy}/${enabled.length}`, subtext: 'services healthy' },
+      { icon: 'world', text: cfg.domain || '—', subtext: cfg.domain ? 'public domain' : 'no domain' }
+    ]
+  });
+}));
+
 // ── routes ───────────────────────────────────────────────────────────────────
 
 app.get('/api/config', requireAuth, (req, res) => {
   const cfg = loadConfig();
-  // Never expose private key to the frontend
+  // Never expose the private key or the preshared key to the frontend: both
+  // are tunnel secrets, and the UI never needs their values (the VPS script is
+  // the only consumer, generated server-side).
   res.json({
     ...cfg,
     vpsIp: cfg.vpsIp || '',
     vpsPort: cfg.vpsPort || 51820,
     vpsPubKey: cfg.vpsPubKey || '',
     privateKey: cfg.privateKey ? '••••' : '',
+    presharedKey: cfg.presharedKey ? '••••' : '',
     vpsPubKeyFingerprint: keyFingerprint(cfg.vpsPubKey || '')
   });
 });
@@ -672,6 +841,7 @@ app.post('/api/config', requireAuth, async (req, res) => {
       const existing = loadConfig();
       const update = req.body || {};
       if (update.privateKey === '••••') update.privateKey = existing.privateKey;
+      if (update.presharedKey === '••••') update.presharedKey = existing.presharedKey;
 
       const cfg = { ...existing, ...update };
       cfg.services = Array.isArray(cfg.services)
@@ -721,8 +891,8 @@ app.get('/api/keygen', requireAuth, asyncHandler(async (req, res) => {
   } catch (err) {
     return res.status(503).json({ error: 'WireGuard unavailable: ' + err.message });
   }
-  // Save private key immediately, return only public key. Bajo el lock para no
-  // pisar (ni ser pisado por) un POST /api/config concurrente.
+  // Save private key immediately, return only public key. Under the lock so it
+  // doesn't clobber (or get clobbered by) a concurrent POST /api/config.
   await withConfigLock(async () => {
     const cfg = loadConfig();
     cfg.privateKey = keys.privateKey;
@@ -800,14 +970,14 @@ app.get('/api/audit/verify', requireAuth, (req, res) => {
   res.json(audit.verifyChain());
 });
 
-// ── manejo de errores ────────────────────────────────────────────────────────
+// ── error handling ───────────────────────────────────────────────────────────
 
-// Red de seguridad: cualquier throw síncrono o rechazo reenviado vía next(err)
-// (handlers envueltos en asyncHandler) responde 500 en vez de colgar la request.
-// No expone err.message al cliente para no filtrar contexto sensible.
-// Excepción: los errores del body parser (JSON malformado, body > 32kb) llevan
-// err.status 4xx — son errores del cliente, se responden como tal y no se
-// registran como request.error en el audit log.
+// Safety net: any synchronous throw or rejection forwarded via next(err)
+// (handlers wrapped in asyncHandler) answers 500 instead of hanging the request.
+// err.message is not exposed to the client to avoid leaking sensitive context.
+// Exception: body-parser errors (malformed JSON, body > 32kb) carry err.status
+// 4xx — they are client errors, answered as such, and not logged as
+// request.error in the audit log.
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
   const clientStatus = Number(err && (err.status || err.statusCode));
@@ -838,6 +1008,12 @@ function startServer() {
   )).toString('base64url');
   migrateConfigIfNeeded();
   migrateWgConfIfNeeded();
+  // The Caddyfile is an artifact derived from config.json by design: it is
+  // regenerated on EVERY startup (not just after restores). That way a backup
+  // restore without caddy/data (backupIgnore) never leaves Caddy stuck on the
+  // placeholder, and any manual Caddyfile edit is deliberately discarded —
+  // the source of truth is config.json.
+  regenerateCaddyfileFromConfig();
   refreshHealthSnapshot();
   if (!healthTimer) {
     healthTimer = setInterval(() => {
@@ -849,11 +1025,11 @@ function startServer() {
   const PORT = Number.isFinite(parsedPort) ? parsedPort : 3000;
   const server = app.listen(PORT, () => {
     const actualPort = server.address() && server.address().port ? server.address().port : PORT;
-    console.log(`[web] Umbrel Tunnel UI en :${actualPort}`);
+    console.log(`[web] Umbrel Tunnel UI on :${actualPort}`);
   });
-  // keepAliveTimeout > el idle típico de un proxy (60s) permite reuso desde el
-  // app_proxy; un valor finito (antes 0 = sin timeout) evita acumular sockets
-  // idle hasta agotar descriptores. headersTimeout debe ser estrictamente mayor.
+  // keepAliveTimeout > a proxy's typical idle (60s) allows reuse from the app
+  // gateway; a finite value (previously 0 = no timeout) avoids piling up idle
+  // sockets until descriptors run out. headersTimeout must be strictly greater.
   server.keepAliveTimeout = 75_000;
   server.headersTimeout = 76_000;
   runningServers += 1;
@@ -878,8 +1054,19 @@ module.exports = {
     proxyPeerGate,
     normalizePeerIp,
     isLoopbackPeer,
-    __setProxyPeersForTest(ips, resolvedAt = Date.now()) {
-      proxyPeers = { ips: new Set(ips), resolvedAt };
+    readDefaultGatewayIps,
+    resolveProxyPeers,
+    __setProxyPeersForTest(ips, resolvedAt = Date.now(), gateways = []) {
+      proxyPeers = { ips: new Set([...ips, ...gateways]), gateways: new Set(gateways), resolvedAt };
+    },
+    __getProxyPeersForTest() {
+      return proxyPeers;
+    },
+    __setAppProxySeenForTest(value) {
+      appProxySeen = Boolean(value);
+    },
+    __getAppProxySeenForTest() {
+      return appProxySeen;
     },
     keyFingerprint,
     isBlockedServiceTarget,
