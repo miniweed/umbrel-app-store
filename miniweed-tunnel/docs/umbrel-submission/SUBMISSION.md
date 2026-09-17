@@ -16,8 +16,10 @@ widget fetch, the UI/API keep requiring `app_proxy` (sticky detection: has
 `app_proxy` resolved since boot). Adds an optional
 `three-stats` home-screen widget backed by an unauthenticated, secret-free
 `/api/widget` endpoint, and `backupIgnore` for regenerable data (LE certs +
-health snapshots). Also fixes the manifest `port` (3016, matching
-`app_proxy APP_PORT`) and aligns `exports.sh` with Umbrel's standard
+health snapshots). The submission manifest keeps `port: 3019` (unique in the
+official store — 3016 is taken by ChainForensics there; the community-store
+manifest stays on 3016 so existing users keep their URL; the container port
+`APP_PORT` is 3016 in both). Aligns `exports.sh` with Umbrel's standard
 `derive_entropy` helper.
 
 ## Status checklist

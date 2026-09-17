@@ -31,7 +31,8 @@ The app is compatible with both umbrelOS 1.x and 2.x:
   only new surface: unauthenticated by design (umbreld fetches it without
   cookies) and secret-free (status text, healthy-service count, public domain).
 
-The manifest's `port` now correctly matches the `app_proxy` `APP_PORT` (3016),
+The manifest `port` stays at 3019 (unique in the store; the container keeps
+listening on `APP_PORT` 3016),
 and a new unauthenticated `/api/widget` endpoint powers an optional
 `three-stats` home-screen widget (tunnel status, healthy services, public
 domain) without exposing any secrets.
