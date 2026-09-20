@@ -15,8 +15,9 @@ host; the old `app_proxy` container no longer exists) — on 1.x only for the
 widget fetch, the UI/API keep requiring `app_proxy` (sticky detection: has
 `app_proxy` resolved since boot). Adds an optional
 `three-stats` home-screen widget backed by an unauthenticated, secret-free
-`/api/widget` endpoint, and `backupIgnore` for regenerable data (LE certs +
-health snapshots). The submission manifest keeps `port: 3019` (unique in the
+`/api/widget` endpoint (`1.7.1` fixes its response: umbreld requires a
+`refresh` field in the body, without it the widget rendered dashes), and
+`backupIgnore` for regenerable data (LE certs + health snapshots). The submission manifest keeps `port: 3019` (unique in the
 official store — 3016 is taken by ChainForensics there; the community-store
 manifest stays on 3016 so existing users keep their URL; the container port
 `APP_PORT` is 3016 in both). Aligns `exports.sh` with Umbrel's standard
@@ -40,7 +41,7 @@ manifest stays on 3016 so existing users keep their URL; the container port
       with `.gitkeep`
 - [x] `app_proxy` uses framework defaults (Umbrel auth is enabled by default;
       `PROXY_AUTH_ADD` is not set)
-- [x] Manifest (`umbrel-app.yml`) with `version: "1.7.0"`, `gallery: []`,
+- [x] Manifest (`umbrel-app.yml`) with `version: "1.7.1"`, `gallery: []`,
       `releaseNotes: ""`, `backupIgnore`, `submitter`, `submission`
 - [x] `docker-compose.yml` with all images pinned by multi-arch digest
 - [x] App tested end-to-end on real umbrelOS (tunnel + HTTPS working), plus
@@ -52,7 +53,7 @@ manifest stays on 3016 so existing users keep their URL; the container port
 
 ## Image digests (verify against ghcr.io before re-pinning)
 
-- `ghcr.io/miniweed/umbrel-tunnel-web:1.7.0` (rebuild + repin before pushing the PR update)
+- `ghcr.io/miniweed/umbrel-tunnel-web:1.7.1` (rebuild + repin before pushing the PR update)
   `<TBD — publish-images.yml will produce it on the next version bump>`
 - `ghcr.io/miniweed/umbrel-tunnel-wg:1.0.6` (unchanged)
   `sha256:22fbcbc01c31ec70c623ac670f195353c5fa37525ccecb18be86d9df2ed87469`

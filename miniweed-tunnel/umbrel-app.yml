@@ -3,7 +3,7 @@ id: miniweed-tunnel
 name: Tunnel
 tagline: Expose your services to the world without touching your router
 category: networking
-version: "1.7.0"
+version: "1.7.1"
 icon: https://raw.githubusercontent.com/miniweed/umbrel-app-store/main/miniweed-tunnel/icon.svg
 port: 3016
 description: >-
@@ -34,6 +34,11 @@ repo: https://github.com/miniweed/umbrel-app-store
 support: https://github.com/miniweed/umbrel-app-store/issues
 gallery: []
 releaseNotes: >-
+  Fixes the home screen widget, which showed dashes instead of the tunnel status
+  since 1.7.0 (the widget response was missing the refresh interval umbrelOS
+  expects).
+
+
   umbrelOS 2.0 compatibility: the app now works with Umbrel's new in-process app
   gateway (the app_proxy container no longer exists in umbrelOS 2.x), while
   remaining compatible with umbrelOS 1.x.

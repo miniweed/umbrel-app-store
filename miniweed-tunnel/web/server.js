@@ -781,6 +781,11 @@ function wgApi(urlPath) {
 // default /api rate-limit bucket, with the gateway IP as its only client: UI
 // and widget consume the same bucket, with no practical impact) so umbreld
 // doesn't need cookies. Returns the umbrelOS `three-stats` shape.
+//
+// `refresh` is mandatory in the BODY, not just in the manifest: umbreld runs
+// `ms(widgetData.refresh)` on the response (1.x and 2.x alike) and `ms(undefined)`
+// throws, which makes the home-screen widget render as dashes.
+const WIDGET_REFRESH = '30s';
 app.get('/api/widget', asyncHandler(async (req, res) => {
   const cfg = loadConfig();
   const services = Array.isArray(cfg.services) ? cfg.services : [];
@@ -801,6 +806,7 @@ app.get('/api/widget', asyncHandler(async (req, res) => {
 
   res.json({
     type: 'three-stats',
+    refresh: WIDGET_REFRESH,
     link: '',
     items: [
       { icon: 'route', text: tunnelText, subtext: tunnelSub },

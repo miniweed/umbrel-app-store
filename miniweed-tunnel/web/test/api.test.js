@@ -836,6 +836,9 @@ describe('api hardening', () => {
     expect(r.status).toBe(200);
     const body = JSON.parse(r.body);
     expect(body.type).toBe('three-stats');
+    // umbreld does ms(body.refresh) and throws on undefined: the widget then
+    // shows dashes (1.7.0 regression). It must be a non-empty duration string.
+    expect(body.refresh).toBe('30s');
     expect(Array.isArray(body.items)).toBe(true);
     expect(body.items.length).toBe(3);
     // No secretos ni material sensible en el widget.
