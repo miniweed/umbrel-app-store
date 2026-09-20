@@ -54,7 +54,7 @@ manifest stays on 3016 so existing users keep their URL; the container port
 ## Image digests (verify against ghcr.io before re-pinning)
 
 - `ghcr.io/miniweed/umbrel-tunnel-web:1.7.1` (rebuild + repin before pushing the PR update)
-  `<TBD — publish-images.yml will produce it on the next version bump>`
+  `sha256:f8ee121a4f685359b78505ee5151330230205d2a58c8b2e33a60331ed82ef682`
 - `ghcr.io/miniweed/umbrel-tunnel-wg:1.0.6` (unchanged)
   `sha256:22fbcbc01c31ec70c623ac670f195353c5fa37525ccecb18be86d9df2ed87469`
 - `caddy:2.8-alpine` (unchanged)
